@@ -1,0 +1,789 @@
+/* ═══════════════════════════════════════════════════════════
+   Time Tracker Module — Custom Styles
+   Corporate Modern Minimalism
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Font Imports ──────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+/* ─── CSS Variables ─────────────────────────────────────── */
+.tt-theme {
+  --tt-bg: #f7f9fb;
+  --tt-surface: #ffffff;
+  --tt-heading: #131b2e;
+  --tt-text: #1f2a41;
+  --tt-muted: #6b7b93;
+  --tt-border: #dce3ed;
+  --tt-border-light: #e8edf4;
+  --tt-primary: #1d4ed8;
+  --tt-primary-hover: #1e3bb3;
+  --tt-success: #16a34a;
+  --tt-warning: #d97706;
+  --tt-danger: #dc2626;
+  --tt-shadow: 0 1px 3px rgba(19, 27, 46, 0.06), 0 1px 2px rgba(19, 27, 46, 0.04);
+  --tt-shadow-lg: 0 4px 12px rgba(19, 27, 46, 0.08);
+  --tt-radius: 10px;
+  --tt-radius-sm: 6px;
+  --tt-transition: 0.2s ease;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ─── Clock / Mono Numbers ──────────────────────────────── */
+.tt-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* ─── Avatar ────────────────────────────────────────────── */
+.tt-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'Inter', sans-serif;
+  color: #ffffff;
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+
+.tt-name {
+  font-size: 13px;
+  color: var(--tt-heading);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-dept-label {
+  font-size: 11px;
+  color: var(--tt-muted);
+  margin-top: 1px;
+  white-space: nowrap;
+}
+
+/* ─── Status Badge ──────────────────────────────────────── */
+.tt-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.tt-status-dot {
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* ─── Header ────────────────────────────────────────────── */
+.tt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.tt-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.tt-header-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 18px;
+  box-shadow: 0 2px 8px rgba(29, 78, 216, 0.25);
+}
+
+.tt-header-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--tt-heading);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.tt-header-sub {
+  font-size: 0.75rem;
+  color: var(--tt-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 1px;
+}
+
+.tt-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* ─── Live Clock ────────────────────────────────────────── */
+.tt-live-clock {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: var(--tt-heading);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.tt-live-clock-seconds {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--tt-muted);
+  margin-left: 2px;
+}
+
+.tt-header-date {
+  font-size: 0.78rem;
+  color: var(--tt-muted);
+  font-weight: 500;
+  text-align: right;
+}
+
+/* ─── Identity Switcher ─────────────────────────────────── */
+.tt-identity-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem 0.35rem 0.35rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color var(--tt-transition), box-shadow var(--tt-transition);
+}
+
+.tt-identity-switcher:hover {
+  border-color: #b8c8dd;
+  box-shadow: var(--tt-shadow);
+}
+
+.tt-identity-info {
+  text-align: left;
+}
+
+.tt-identity-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tt-heading);
+  line-height: 1.2;
+}
+
+.tt-identity-role {
+  font-size: 10px;
+  color: var(--tt-muted);
+  line-height: 1.2;
+}
+
+.tt-identity-dropdown {
+  min-width: 220px;
+  padding: 0.35rem;
+}
+
+.tt-identity-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+}
+
+.tt-identity-dropdown-item:hover {
+  background: #f1f5f9;
+}
+
+.tt-identity-dropdown-item.is-active {
+  background: #eef2ff;
+  color: var(--tt-primary);
+  font-weight: 600;
+}
+
+/* ─── Tab Navigation ────────────────────────────────────── */
+.tt-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.25rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-border-light);
+  border-radius: 12px;
+  margin-bottom: 1.25rem;
+}
+
+.tt-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tt-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--tt-transition);
+  white-space: nowrap;
+}
+
+.tt-tab:hover {
+  color: var(--tt-heading);
+  background: #f1f5f9;
+}
+
+.tt-tab.active {
+  color: var(--tt-primary);
+  background: #eef2ff;
+  box-shadow: 0 1px 2px rgba(29, 78, 216, 0.1);
+}
+
+.tt-tab-icon {
+  font-size: 14px;
+}
+
+/* ─── Metric Cards ──────────────────────────────────────── */
+.tt-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+@media (max-width: 768px) {
+  .tt-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .tt-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tt-metric-card {
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-border-light);
+  border-radius: var(--tt-radius);
+  padding: 1rem 1.1rem;
+  transition: box-shadow var(--tt-transition), transform var(--tt-transition);
+}
+
+.tt-metric-card:hover {
+  box-shadow: var(--tt-shadow-lg);
+  transform: translateY(-1px);
+}
+
+.tt-metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.tt-metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tt-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tt-metric-icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #fff;
+}
+
+.tt-metric-value {
+  font-size: 1.65rem;
+  font-weight: 800;
+  color: var(--tt-heading);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.tt-metric-change {
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.tt-metric-change.up {
+  color: var(--tt-success);
+}
+
+.tt-metric-change.down {
+  color: var(--tt-danger);
+}
+
+/* ─── Department Bar Graph ───────────────────────────────── */
+.tt-dept-bars {
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-border-light);
+  border-radius: var(--tt-radius);
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.25rem;
+}
+
+.tt-dept-bars-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tt-heading);
+  margin-bottom: 0.85rem;
+}
+
+.tt-dept-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.tt-dept-bar-label {
+  min-width: 90px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tt-text);
+  white-space: nowrap;
+}
+
+.tt-dept-bar-track {
+  flex: 1;
+  height: 22px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.tt-dept-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+}
+
+.tt-dept-bar-value {
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  white-space: nowrap;
+}
+
+.tt-dept-bar-meta {
+  min-width: 65px;
+  font-size: 11px;
+  color: var(--tt-muted);
+  text-align: right;
+  font-weight: 500;
+}
+
+/* ─── Punch Terminal ─────────────────────────────────────── */
+.tt-punch-terminal {
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-border-light);
+  border-radius: var(--tt-radius);
+  padding: 1.5rem;
+  text-align: center;
+  margin-bottom: 1.25rem;
+}
+
+.tt-punch-clock {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--tt-heading);
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  margin-bottom: 0.25rem;
+}
+
+.tt-punch-seconds {
+  font-size: 1.5rem;
+  font-weight: 500;
+  color: var(--tt-muted);
+}
+
+.tt-punch-date {
+  font-size: 0.8rem;
+  color: var(--tt-muted);
+  font-weight: 500;
+  margin-bottom: 1rem;
+}
+
+.tt-punch-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  color: var(--tt-muted);
+  margin-bottom: 1rem;
+  padding: 0.25rem 0.75rem;
+  background: #f1f5f9;
+  border-radius: 999px;
+}
+
+.tt-punch-session.active {
+  color: var(--tt-success);
+  background: #f0fdf4;
+}
+
+.tt-punch-session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tt-success);
+  animation: tt-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes tt-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+.tt-punch-employee {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--tt-heading);
+  margin-bottom: 1rem;
+}
+
+.tt-punch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.5rem;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: all var(--tt-transition);
+  color: #ffffff;
+}
+
+.tt-punch-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--tt-shadow-lg);
+}
+
+.tt-punch-btn.check-in {
+  background: linear-gradient(135deg, #16a34a, #15803d);
+}
+
+.tt-punch-btn.check-out {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+}
+
+.tt-punch-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.85rem;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 0.75rem;
+}
+
+.tt-punch-status.on-time {
+  color: var(--tt-success);
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.tt-punch-status.late {
+  color: var(--tt-warning);
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+/* ─── Dashboard Split Layout ─────────────────────────────── */
+.tt-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 992px) {
+  .tt-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Attendance Logs Filters ────────────────────────────── */
+.tt-logs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.tt-logs-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tt-logs-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--tt-border);
+  background: var(--tt-surface);
+  color: var(--tt-text);
+  cursor: pointer;
+  transition: all var(--tt-transition);
+}
+
+.tt-export-btn:hover {
+  background: #f1f5f9;
+  border-color: #b8c8dd;
+}
+
+/* ─── Schedule Grid ──────────────────────────────────────── */
+.tt-schedule-wrapper {
+  overflow-x: auto;
+}
+
+.tt-schedule-grid {
+  display: grid;
+  grid-template-columns: 180px repeat(5, 1fr);
+  gap: 0;
+  min-width: 700px;
+  border: 1px solid var(--tt-border-light);
+  border-radius: var(--tt-radius);
+  overflow: hidden;
+}
+
+.tt-schedule-header-cell {
+  padding: 0.65rem 0.75rem;
+  background: #f1f5f9;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--tt-heading);
+  border-bottom: 2px solid var(--tt-border);
+  text-align: center;
+}
+
+.tt-schedule-header-cell:first-child {
+  text-align: left;
+}
+
+.tt-schedule-header-cell.is-today {
+  background: #eef2ff;
+  color: var(--tt-primary);
+}
+
+.tt-schedule-row {
+  display: contents;
+}
+
+.tt-schedule-cell {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--tt-border-light);
+  font-size: 12px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+
+.tt-schedule-cell.employee-cell {
+  font-weight: 600;
+  color: var(--tt-text);
+  gap: 0.5rem;
+}
+
+.tt-schedule-cell.shift-cell {
+  justify-content: center;
+}
+
+.tt-schedule-shift {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  width: 100%;
+}
+
+.tt-schedule-shift.morning {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.tt-schedule-shift.afternoon {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.tt-schedule-shift.night {
+  background: #e0e7ff;
+  color: #4338ca;
+}
+
+.tt-schedule-shift.flexible {
+  background: #f3e8ff;
+  color: #7c3aed;
+  border: 1px dashed #c4b5fd;
+}
+
+/* ─── Settings Panel ─────────────────────────────────────── */
+.tt-settings-section {
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-border-light);
+  border-radius: var(--tt-radius);
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.tt-settings-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--tt-heading);
+  margin-bottom: 0.35rem;
+}
+
+.tt-settings-desc {
+  font-size: 12px;
+  color: var(--tt-muted);
+  margin-bottom: 1rem;
+}
+
+.tt-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.tt-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tt-settings-field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tt-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ─── Modal / Dialog Overrides ───────────────────────────── */
+.tt-dialog-employee-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.tt-dialog-employee-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  transition: background 0.15s ease;
+}
+
+.tt-dialog-employee-item:hover {
+  background: #f1f5f9;
+}
+
+.tt-dialog-employee-item.is-selected {
+  background: #eef2ff;
+  color: var(--tt-primary);
+  font-weight: 600;
+}
+
+/* ─── Misc Utilities ─────────────────────────────────────── */
+.tt-flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tt-gap-2 { gap: 0.5rem; }
+.tt-gap-3 { gap: 0.75rem; }
+.tt-gap-4 { gap: 1rem; }
+
+.tt-text-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ─── Dark Scrollbar (for schedule) ──────────────────────── */
+.tt-schedule-wrapper::-webkit-scrollbar {
+  height: 6px;
+}
+
+.tt-schedule-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tt-schedule-wrapper::-webkit-scrollbar-thumb {
+  background: #dce3ed;
+  border-radius: 999px;
+}
+
+.tt-schedule-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #b8c8dd;
+}
