@@ -24,11 +24,12 @@
   flex-direction: column;
   padding: 1.5rem 1rem;
   position: fixed;
-  top: 70px;
-  left: 0;
+  top: 60px;
+  left: 20px;
   height: calc(100vh - 70px);
   overflow-y: auto;
   z-index: 100;
+  border-radius: 12px 12px 12px 12px;
 }
 
 /* ─── Logo + Title ──────────────────────────────────────── */
