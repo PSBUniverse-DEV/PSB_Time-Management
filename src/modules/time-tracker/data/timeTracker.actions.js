@@ -2,31 +2,25 @@
  * Server Actions — timeTracker.actions.js
  *
  * Server-side data loading functions.
- * Currently returns mock data for development.
+ * Kept as stubs for future implementation.
  */
 "use server";
 
 import {
-  MOCK_ATTENDANCE,
-  MOCK_SCHEDULE,
-  EMPLOYEES,
-  DEPARTMENTS,
   DEFAULT_LATE_DEADLINE,
   DEFAULT_GRACE_PERIOD,
 } from "./timeTracker.data";
 
 /**
  * Load all time tracker data (attendance records, employees, departments)
+ * TODO: Implement database loading
  */
 export async function loadTimeTrackerData() {
-  // Simulate network delay
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
   return {
-    attendance: MOCK_ATTENDANCE,
-    schedule: MOCK_SCHEDULE,
-    employees: EMPLOYEES,
-    departments: DEPARTMENTS,
+    attendance: [],
+    schedule: [],
+    employees: [],
+    departments: [],
     config: {
       lateDeadline: DEFAULT_LATE_DEADLINE,
       gracePeriod: DEFAULT_GRACE_PERIOD,
@@ -38,7 +32,6 @@ export async function loadTimeTrackerData() {
  * Clock in an employee
  */
 export async function clockIn(employeeId) {
-  await new Promise((resolve) => setTimeout(resolve, 150));
   const now = new Date();
   const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
@@ -61,7 +54,6 @@ export async function clockIn(employeeId) {
  * Clock out an employee
  */
 export async function clockOut(employeeId, recordId) {
-  await new Promise((resolve) => setTimeout(resolve, 150));
   const now = new Date();
   const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
@@ -76,7 +68,6 @@ export async function clockOut(employeeId, recordId) {
  * Update an attendance record
  */
 export async function updateAttendanceRecord(id, data) {
-  await new Promise((resolve) => setTimeout(resolve, 150));
   return { success: true, id, ...data };
 }
 
@@ -84,7 +75,6 @@ export async function updateAttendanceRecord(id, data) {
  * Delete an attendance record
  */
 export async function deleteAttendanceRecord(id) {
-  await new Promise((resolve) => setTimeout(resolve, 100));
   return { success: true, id };
 }
 
@@ -92,7 +82,6 @@ export async function deleteAttendanceRecord(id) {
  * Save schedule assignments
  */
 export async function saveSchedule(scheduleChanges) {
-  await new Promise((resolve) => setTimeout(resolve, 200));
   return { success: true, changes: scheduleChanges.length };
 }
 
@@ -100,6 +89,5 @@ export async function saveSchedule(scheduleChanges) {
  * Update configuration (late deadline, grace period)
  */
 export async function updateConfig(config) {
-  await new Promise((resolve) => setTimeout(resolve, 150));
   return { success: true, config };
 }

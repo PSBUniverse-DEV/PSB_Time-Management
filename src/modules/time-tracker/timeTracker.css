@@ -1,789 +1,674 @@
 /* ═══════════════════════════════════════════════════════════
-   Time Tracker Module — Custom Styles
-   Corporate Modern Minimalism
+   PSB Time Tracker — Redesigned Logs Page
+   Dark Teal Sidebar | Mint-Green Accents | Clean SaaS Aesthetic
    ═══════════════════════════════════════════════════════════ */
 
 /* ─── Font Imports ──────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Merriweather:wght@700;900&display=swap');
 
-/* ─── CSS Variables ─────────────────────────────────────── */
-.tt-theme {
-  --tt-bg: #f7f9fb;
-  --tt-surface: #ffffff;
-  --tt-heading: #131b2e;
-  --tt-text: #1f2a41;
-  --tt-muted: #6b7b93;
-  --tt-border: #dce3ed;
-  --tt-border-light: #e8edf4;
-  --tt-primary: #1d4ed8;
-  --tt-primary-hover: #1e3bb3;
-  --tt-success: #16a34a;
-  --tt-warning: #d97706;
-  --tt-danger: #dc2626;
-  --tt-shadow: 0 1px 3px rgba(19, 27, 46, 0.06), 0 1px 2px rgba(19, 27, 46, 0.04);
-  --tt-shadow-lg: 0 4px 12px rgba(19, 27, 46, 0.08);
-  --tt-radius: 10px;
-  --tt-radius-sm: 6px;
-  --tt-transition: 0.2s ease;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-/* ─── Clock / Mono Numbers ──────────────────────────────── */
-.tt-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-/* ─── Avatar ────────────────────────────────────────────── */
-.tt-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  font-family: 'Inter', sans-serif;
-  color: #ffffff;
-  letter-spacing: 0.03em;
-  line-height: 1;
-}
-
-.tt-name {
-  font-size: 13px;
-  color: var(--tt-heading);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tt-dept-label {
-  font-size: 11px;
-  color: var(--tt-muted);
-  margin-top: 1px;
-  white-space: nowrap;
-}
-
-/* ─── Status Badge ──────────────────────────────────────── */
-.tt-status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  border: 1px solid transparent;
-  white-space: nowrap;
-}
-
-.tt-status-dot {
-  font-size: 10px;
-  line-height: 1;
-}
-
-/* ─── Header ────────────────────────────────────────────── */
-.tt-header {
+/* ═══════════════════════════════════════════════════════════
+   APP LAYOUT — Sidebar + Main
+   ═══════════════════════════════════════════════════════════ */
+.tt-app-layout {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
+  min-height: 100vh;
+  background: #f5f7fa;
 }
 
-.tt-header-left {
+/* ─── Sidebar ───────────────────────────────────────────── */
+.tt-sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: linear-gradient(180deg, #1e4c5c 0%, #163a47 100%);
   display: flex;
-  align-items: center;
-  gap: 0.85rem;
+  flex-direction: column;
+  padding: 1.5rem 1rem;
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  overflow-y: auto;
+  z-index: 100;
 }
 
-.tt-header-icon {
-  width: 42px;
-  height: 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #1d4ed8, #2563eb);
-  border-radius: 12px;
-  color: #fff;
-  font-size: 18px;
-  box-shadow: 0 2px 8px rgba(29, 78, 216, 0.25);
-}
-
-.tt-header-title {
-  font-size: 1.35rem;
-  font-weight: 800;
-  color: var(--tt-heading);
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-  margin: 0;
-}
-
-.tt-header-sub {
-  font-size: 0.75rem;
-  color: var(--tt-muted);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-top: 1px;
-}
-
-.tt-header-right {
+/* ─── Logo + Title ──────────────────────────────────────── */
+.tt-sidebar-brand {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding: 0 0.25rem;
 }
 
-/* ─── Live Clock ────────────────────────────────────────── */
-.tt-live-clock {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 1.65rem;
-  font-weight: 700;
-  color: var(--tt-heading);
+.tt-logo {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  border-radius: 10px;
+  background: #e8602a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 800;
+  color: #ffffff;
   letter-spacing: 0.04em;
   line-height: 1;
 }
 
-.tt-live-clock-seconds {
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--tt-muted);
-  margin-left: 2px;
-}
-
-.tt-header-date {
-  font-size: 0.78rem;
-  color: var(--tt-muted);
-  font-weight: 500;
-  text-align: right;
-}
-
-/* ─── Identity Switcher ─────────────────────────────────── */
-.tt-identity-switcher {
+.tt-brand-text {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.6rem 0.35rem 0.35rem;
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-border);
-  border-radius: 10px;
-  cursor: pointer;
-  transition: border-color var(--tt-transition), box-shadow var(--tt-transition);
+  flex-direction: column;
 }
 
-.tt-identity-switcher:hover {
-  border-color: #b8c8dd;
-  box-shadow: var(--tt-shadow);
-}
-
-.tt-identity-info {
-  text-align: left;
-}
-
-.tt-identity-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--tt-heading);
+.tt-brand-title {
+  font-family: 'Merriweather', 'Georgia', serif;
+  font-size: 18px;
+  font-weight: 900;
+  color: #ffffff;
   line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
-.tt-identity-role {
-  font-size: 10px;
-  color: var(--tt-muted);
-  line-height: 1.2;
-}
-
-.tt-identity-dropdown {
-  min-width: 220px;
-  padding: 0.35rem;
-}
-
-.tt-identity-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  border: none;
-  background: none;
-  width: 100%;
-  text-align: left;
-  font-size: 13px;
-}
-
-.tt-identity-dropdown-item:hover {
-  background: #f1f5f9;
-}
-
-.tt-identity-dropdown-item.is-active {
-  background: #eef2ff;
-  color: var(--tt-primary);
+.tt-brand-subtitle {
+  font-family: 'Inter', sans-serif;
+  font-size: 9px;
   font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  margin-top: 1px;
 }
 
-/* ─── Tab Navigation ────────────────────────────────────── */
-.tt-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15rem;
-  padding: 0.25rem;
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-border-light);
+/* ─── Digital Clock Card ────────────────────────────────── */
+.tt-sidebar-clock-card {
+  background: rgba(0, 0, 0, 0.18);
   border-radius: 12px;
-  margin-bottom: 1.25rem;
+  padding: 0.9rem 1rem;
+  margin-bottom: 1.5rem;
+  text-align: center;
 }
 
-.tt-tab {
-  display: inline-flex;
+.tt-sidebar-clock-time {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+}
+
+.tt-sidebar-clock-date {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 0.3rem;
+}
+
+/* ─── Navigation ────────────────────────────────────────── */
+.tt-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1;
+}
+
+.tt-nav-item {
+  display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.85rem;
-  border-radius: 9px;
+  gap: 0.65rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
   font-size: 13px;
   font-weight: 600;
-  color: var(--tt-muted);
+  color: rgba(255, 255, 255, 0.75);
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all var(--tt-transition);
-  white-space: nowrap;
+  transition: all 0.15s ease;
+  text-decoration: none;
+  width: 100%;
+  text-align: left;
 }
 
-.tt-tab:hover {
-  color: var(--tt-heading);
-  background: #f1f5f9;
-}
-
-.tt-tab.active {
-  color: var(--tt-primary);
-  background: #eef2ff;
-  box-shadow: 0 1px 2px rgba(29, 78, 216, 0.1);
-}
-
-.tt-tab-icon {
-  font-size: 14px;
-}
-
-/* ─── Metric Cards ──────────────────────────────────────── */
-.tt-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.85rem;
-  margin-bottom: 1.25rem;
-}
-
-@media (max-width: 768px) {
-  .tt-metrics {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 480px) {
-  .tt-metrics {
-    grid-template-columns: 1fr;
-  }
-}
-
-.tt-metric-card {
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-border-light);
-  border-radius: var(--tt-radius);
-  padding: 1rem 1.1rem;
-  transition: box-shadow var(--tt-transition), transform var(--tt-transition);
-}
-
-.tt-metric-card:hover {
-  box-shadow: var(--tt-shadow-lg);
-  transform: translateY(-1px);
-}
-
-.tt-metric-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-}
-
-.tt-metric-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--tt-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.tt-metric-icon {
-  width: 32px;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #fff;
-}
-
-.tt-metric-value {
-  font-size: 1.65rem;
-  font-weight: 800;
-  color: var(--tt-heading);
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-}
-
-.tt-metric-change {
-  font-size: 11px;
-  font-weight: 600;
-  margin-top: 0.25rem;
-}
-
-.tt-metric-change.up {
-  color: var(--tt-success);
-}
-
-.tt-metric-change.down {
-  color: var(--tt-danger);
-}
-
-/* ─── Department Bar Graph ───────────────────────────────── */
-.tt-dept-bars {
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-border-light);
-  border-radius: var(--tt-radius);
-  padding: 1rem 1.1rem;
-  margin-bottom: 1.25rem;
-}
-
-.tt-dept-bars-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--tt-heading);
-  margin-bottom: 0.85rem;
-}
-
-.tt-dept-bar-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.55rem;
-}
-
-.tt-dept-bar-label {
-  min-width: 90px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--tt-text);
-  white-space: nowrap;
-}
-
-.tt-dept-bar-track {
-  flex: 1;
-  height: 22px;
-  background: #f1f5f9;
-  border-radius: 999px;
-  overflow: hidden;
-  position: relative;
-}
-
-.tt-dept-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
-  display: flex;
-  align-items: center;
-  padding-left: 8px;
-}
-
-.tt-dept-bar-value {
-  font-size: 10px;
-  font-weight: 700;
+.tt-nav-item:hover {
   color: #ffffff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.tt-dept-bar-meta {
-  min-width: 65px;
-  font-size: 11px;
-  color: var(--tt-muted);
-  text-align: right;
-  font-weight: 500;
+.tt-nav-item.active {
+  color: #1e4c5c;
+  background: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* ─── Punch Terminal ─────────────────────────────────────── */
-.tt-punch-terminal {
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-border-light);
-  border-radius: var(--tt-radius);
-  padding: 1.5rem;
+.tt-nav-item.active:hover {
+  background: #ffffff;
+}
+
+.tt-nav-icon {
+  font-size: 14px;
+  width: 18px;
   text-align: center;
-  margin-bottom: 1.25rem;
 }
 
-.tt-punch-clock {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 3rem;
-  font-weight: 700;
-  color: var(--tt-heading);
-  letter-spacing: 0.04em;
-  line-height: 1.1;
-  margin-bottom: 0.25rem;
-}
-
-.tt-punch-seconds {
-  font-size: 1.5rem;
-  font-weight: 500;
-  color: var(--tt-muted);
-}
-
-.tt-punch-date {
-  font-size: 0.8rem;
-  color: var(--tt-muted);
-  font-weight: 500;
-  margin-bottom: 1rem;
-}
-
-.tt-punch-session {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 1rem;
-  color: var(--tt-muted);
-  margin-bottom: 1rem;
-  padding: 0.25rem 0.75rem;
-  background: #f1f5f9;
-  border-radius: 999px;
-}
-
-.tt-punch-session.active {
-  color: var(--tt-success);
-  background: #f0fdf4;
-}
-
-.tt-punch-session-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--tt-success);
-  animation: tt-pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes tt-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.3); }
-}
-
-.tt-punch-employee {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--tt-heading);
-  margin-bottom: 1rem;
-}
-
-.tt-punch-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.65rem 1.5rem;
+/* ─── Clock Status Card (Sidebar Bottom) ────────────────── */
+.tt-sidebar-status-card {
+  background: rgba(0, 0, 0, 0.18);
   border-radius: 12px;
-  font-size: 14px;
+  padding: 0.9rem 1rem;
+  margin-top: auto;
+}
+
+.tt-sidebar-status-label {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
   font-weight: 700;
-  border: none;
-  cursor: pointer;
-  transition: all var(--tt-transition);
-  color: #ffffff;
+  color: #f97316;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
 }
 
-.tt-punch-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--tt-shadow-lg);
+.tt-sidebar-status-meta {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 0.2rem;
 }
 
-.tt-punch-btn.check-in {
-  background: linear-gradient(135deg, #16a34a, #15803d);
+/* ═══════════════════════════════════════════════════════════
+   MAIN CONTENT
+   ═══════════════════════════════════════════════════════════ */
+.tt-main {
+  flex: 1;
+  margin-left: 260px;
+  padding: 1.75rem 2rem;
+  min-height: 100vh;
+  max-width: calc(100vw - 260px);
 }
 
-.tt-punch-btn.check-out {
-  background: linear-gradient(135deg, #dc2626, #b91c1c);
+/* ─── Page Header ───────────────────────────────────────── */
+.tt-page-header {
+  margin-bottom: 1.5rem;
 }
 
-.tt-punch-status {
+.tt-page-title {
+  font-family: 'Merriweather', 'Georgia', serif;
+  font-size: 1.75rem;
+  font-weight: 900;
+  color: #1a2b3c;
+  line-height: 1.2;
+  margin: 0 0 0.25rem 0;
+}
+
+.tt-page-subtitle {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  color: #6b7b93;
+  font-weight: 500;
+}
+
+/* ─── Filter Card (Mint-Green Gradient) ─────────────────── */
+.tt-filter-card {
+  background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.tt-filter-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.tt-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tt-filter-label {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2d6a4f;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tt-filter-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.tt-filter-input {
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  padding: 0.5rem 0.85rem 0.5rem 2.2rem;
+  border: 1px solid #b7d7b7;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1a2b3c;
+  width: 170px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tt-filter-input::placeholder {
+  color: #9aa9b9;
+  font-size: 12px;
+}
+
+.tt-filter-input:focus {
+  border-color: #2d6a4f;
+  box-shadow: 0 0 0 3px rgba(45, 106, 79, 0.12);
+}
+
+.tt-filter-input-icon {
+  position: absolute;
+  left: 0.75rem;
+  color: #6b7b93;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.tt-btn-view {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.25rem 0.85rem;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  margin-top: 0.75rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  background: #ffffff;
+  color: #2d6a4f;
+  border: 1.5px solid #2d6a4f;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
-.tt-punch-status.on-time {
-  color: var(--tt-success);
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+.tt-btn-view:hover {
+  background: #2d6a4f;
+  color: #ffffff;
 }
 
-.tt-punch-status.late {
-  color: var(--tt-warning);
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-}
-
-/* ─── Dashboard Split Layout ─────────────────────────────── */
-.tt-dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 1rem;
-  align-items: start;
-}
-
-@media (max-width: 992px) {
-  .tt-dashboard-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ─── Attendance Logs Filters ────────────────────────────── */
+/* ─── Toolbar (Export + Search) ─────────────────────────── */
 .tt-logs-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-bottom: 0.85rem;
+  margin-bottom: 1rem;
 }
 
-.tt-logs-filters {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.tt-logs-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.tt-export-btn {
+.tt-btn-export {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.65rem;
-  border-radius: 8px;
+  gap: 0.4rem;
+  padding: 0.45rem 1rem;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
   font-size: 12px;
   font-weight: 600;
-  border: 1px solid var(--tt-border);
-  background: var(--tt-surface);
-  color: var(--tt-text);
+  background: transparent;
+  color: #1e4c5c;
+  border: 1.5px solid #1e4c5c;
   cursor: pointer;
-  transition: all var(--tt-transition);
+  transition: all 0.15s ease;
 }
 
-.tt-export-btn:hover {
+.tt-btn-export:hover {
+  background: #1e4c5c;
+  color: #ffffff;
+}
+
+.tt-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.tt-search-input {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  padding: 0.45rem 0.75rem 0.45rem 2rem;
+  border: 1px solid #dce3ed;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1a2b3c;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.tt-search-input::placeholder {
+  color: #9aa9b9;
+}
+
+.tt-search-input:focus {
+  border-color: #1e4c5c;
+  box-shadow: 0 0 0 3px rgba(30, 76, 92, 0.08);
+}
+
+.tt-search-icon {
+  position: absolute;
+  left: 0.65rem;
+  color: #9aa9b9;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DATA TABLE
+   ═══════════════════════════════════════════════════════════ */
+.tt-table-card {
+  background: #ffffff;
+  border: 1px solid #e8edf4;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
+/* Table Header */
+.tt-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid #e8edf4;
+  background: #fafbfc;
+}
+
+.tt-table-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-table-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a2b3c;
+  margin: 0;
+}
+
+.tt-nav-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid #dce3ed;
+  background: #ffffff;
+  color: #4f6578;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.tt-nav-arrow:hover {
   background: #f1f5f9;
   border-color: #b8c8dd;
 }
 
-/* ─── Schedule Grid ──────────────────────────────────────── */
-.tt-schedule-wrapper {
-  overflow-x: auto;
+.tt-nav-arrow:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
-.tt-schedule-grid {
-  display: grid;
-  grid-template-columns: 180px repeat(5, 1fr);
-  gap: 0;
-  min-width: 700px;
-  border: 1px solid var(--tt-border-light);
-  border-radius: var(--tt-radius);
-  overflow: hidden;
-}
-
-.tt-schedule-header-cell {
-  padding: 0.65rem 0.75rem;
-  background: #f1f5f9;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--tt-heading);
-  border-bottom: 2px solid var(--tt-border);
-  text-align: center;
-}
-
-.tt-schedule-header-cell:first-child {
-  text-align: left;
-}
-
-.tt-schedule-header-cell.is-today {
-  background: #eef2ff;
-  color: var(--tt-primary);
-}
-
-.tt-schedule-row {
-  display: contents;
-}
-
-.tt-schedule-cell {
-  padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--tt-border-light);
-  font-size: 12px;
-  min-height: 48px;
-  display: flex;
+.tt-pill-week {
+  display: inline-flex;
   align-items: center;
-}
-
-.tt-schedule-cell.employee-cell {
-  font-weight: 600;
-  color: var(--tt-text);
-  gap: 0.5rem;
-}
-
-.tt-schedule-cell.shift-cell {
-  justify-content: center;
-}
-
-.tt-schedule-shift {
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  background: #e8f0fe;
+  color: #1e4c5c;
+  font-family: 'Inter', sans-serif;
   font-size: 11px;
-  font-weight: 600;
-  text-align: center;
-  width: 100%;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.tt-schedule-shift.morning {
-  background: #dbeafe;
+.tt-pill-week:hover {
+  background: #d4e2f7;
+}
+
+/* Table Grid */
+.tt-table-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tt-table-grid th {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b7b93;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.65rem 1rem;
+  text-align: left;
+  border-bottom: 2px solid #e8edf4;
+  background: #fafbfc;
+  white-space: nowrap;
+}
+
+.tt-table-grid th:last-child {
+  text-align: center;
+}
+
+.tt-table-grid td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #f0f3f8;
+  vertical-align: middle;
+}
+
+.tt-table-grid tr:last-child td {
+  border-bottom: none;
+}
+
+.tt-table-grid tr:hover td {
+  background: #f8fafc;
+}
+
+/* Day Column */
+.tt-day-cell {
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a2b3c;
+}
+
+/* Clocked In/Out Sub-rows */
+.tt-clock-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tt-clock-label {
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: #9aa9b9;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+}
+
+.tt-clock-value {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a2b3c;
+  line-height: 1.3;
+}
+
+.tt-clock-value.subtle {
+  font-size: 11px;
+  font-weight: 500;
+  color: #8a9aa8;
+}
+
+/* Hours Column */
+.tt-hours-cell {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a2b3c;
+}
+
+/* Action Column */
+.tt-action-cell {
+  text-align: center;
+}
+
+.tt-btn-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid #dce3ed;
+  background: #ffffff;
+  color: #6b7b93;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+}
+
+.tt-btn-edit:hover {
+  background: #eff6ff;
+  border-color: #93b4d4;
   color: #1d4ed8;
 }
 
-.tt-schedule-shift.afternoon {
-  background: #fef3c7;
-  color: #b45309;
-}
-
-.tt-schedule-shift.night {
-  background: #e0e7ff;
-  color: #4338ca;
-}
-
-.tt-schedule-shift.flexible {
-  background: #f3e8ff;
-  color: #7c3aed;
-  border: 1px dashed #c4b5fd;
-}
-
-/* ─── Settings Panel ─────────────────────────────────────── */
-.tt-settings-section {
-  background: var(--tt-surface);
-  border: 1px solid var(--tt-border-light);
-  border-radius: var(--tt-radius);
-  padding: 1.25rem;
-  margin-bottom: 1rem;
-}
-
-.tt-settings-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--tt-heading);
-  margin-bottom: 0.35rem;
-}
-
-.tt-settings-desc {
+/* Empty / Placeholder Row */
+.tt-placeholder {
+  color: #b8c8dd !important;
+  font-family: 'Inter', sans-serif;
   font-size: 12px;
-  color: var(--tt-muted);
-  margin-bottom: 1rem;
+  font-weight: 500;
 }
 
-.tt-settings-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
+/* ═══════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════ */
+@media (max-width: 992px) {
+  .tt-sidebar {
+    width: 220px;
+    min-width: 220px;
+    padding: 1rem 0.75rem;
+  }
+
+  .tt-main {
+    margin-left: 220px;
+    padding: 1.25rem 1rem;
+    max-width: calc(100vw - 220px);
+  }
+
+  .tt-filter-input {
+    width: 140px;
+  }
+
+  .tt-search-input {
+    width: 180px;
+  }
 }
 
-.tt-settings-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
+@media (max-width: 768px) {
+  .tt-app-layout {
+    flex-direction: column;
+  }
 
-.tt-settings-field label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--tt-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
+  .tt-sidebar {
+    width: 100%;
+    min-width: unset;
+    position: relative;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0.75rem;
+    gap: 0.5rem;
+  }
 
-/* ─── Modal / Dialog Overrides ───────────────────────────── */
-.tt-dialog-employee-list {
-  max-height: 240px;
-  overflow-y: auto;
-}
+  .tt-sidebar-brand {
+    margin-bottom: 0;
+    width: 100%;
+  }
 
-.tt-dialog-employee-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  border-radius: 8px;
-  cursor: pointer;
-  border: none;
-  background: none;
-  width: 100%;
-  text-align: left;
-  font-size: 13px;
-  transition: background 0.15s ease;
-}
+  .tt-sidebar-clock-card {
+    display: none;
+  }
 
-.tt-dialog-employee-item:hover {
-  background: #f1f5f9;
-}
+  .tt-sidebar-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.2rem;
+    flex: unset;
+    width: 100%;
+  }
 
-.tt-dialog-employee-item.is-selected {
-  background: #eef2ff;
-  color: var(--tt-primary);
-  font-weight: 600;
-}
+  .tt-nav-item {
+    font-size: 12px;
+    padding: 0.4rem 0.6rem;
+  }
 
-/* ─── Misc Utilities ─────────────────────────────────────── */
-.tt-flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+  .tt-sidebar-status-card {
+    display: none;
+  }
 
-.tt-gap-2 { gap: 0.5rem; }
-.tt-gap-3 { gap: 0.75rem; }
-.tt-gap-4 { gap: 1rem; }
+  .tt-main {
+    margin-left: 0;
+    max-width: 100%;
+    padding: 1rem 0.75rem;
+  }
 
-.tt-text-mono {
-  font-family: 'JetBrains Mono', monospace;
-}
+  .tt-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 
-/* ─── Dark Scrollbar (for schedule) ──────────────────────── */
-.tt-schedule-wrapper::-webkit-scrollbar {
-  height: 6px;
-}
+  .tt-filter-input {
+    width: 100%;
+  }
 
-.tt-schedule-wrapper::-webkit-scrollbar-track {
-  background: transparent;
-}
+  .tt-logs-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
 
-.tt-schedule-wrapper::-webkit-scrollbar-thumb {
-  background: #dce3ed;
-  border-radius: 999px;
-}
+  .tt-search-input {
+    width: 100%;
+  }
 
-.tt-schedule-wrapper::-webkit-scrollbar-thumb:hover {
-  background: #b8c8dd;
+  .tt-table-grid {
+    font-size: 12px;
+  }
+
+  .tt-table-grid th,
+  .tt-table-grid td {
+    padding: 0.5rem 0.6rem;
+  }
 }
