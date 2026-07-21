@@ -24,9 +24,9 @@
   flex-direction: column;
   padding: 1.5rem 1rem;
   position: fixed;
-  top: 0;
+  top: 70px;
   left: 0;
-  height: 100vh;
+  height: calc(100vh - 70px);
   overflow-y: auto;
   z-index: 100;
 }
@@ -192,7 +192,7 @@
   flex: 1;
   margin-left: 260px;
   padding: 1.75rem 2rem;
-  min-height: 100vh;
+  min-height: calc(100vh - 70px);
   max-width: calc(100vw - 260px);
 }
 
@@ -580,12 +580,15 @@
     width: 220px;
     min-width: 220px;
     padding: 1rem 0.75rem;
+    top: 70px;
+    height: calc(100vh - 70px);
   }
 
   .tt-main {
     margin-left: 220px;
     padding: 1.25rem 1rem;
     max-width: calc(100vw - 220px);
+    min-height: calc(100vh - 70px);
   }
 
   .tt-filter-input {
@@ -606,6 +609,7 @@
     width: 100%;
     min-width: unset;
     position: relative;
+    top: auto;
     height: auto;
     flex-direction: row;
     flex-wrap: wrap;
