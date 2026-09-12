@@ -10,6 +10,7 @@ import {
   Dropdown,
   Input,
   Modal,
+  MultiSelectDropdown,
   SearchBar,
   StatusBadge,
   TableZ,
@@ -52,6 +53,9 @@ const DEMO_STATUS_OPTIONS = STATUS_OPTIONS.length > 0
       { label: "Suspended", value: "suspended" },
     ];
 
+// `TEAM_OPTIONS` defined later in the file is used for forms and demos —
+// remove duplicate here and rely on the centralized definition further down.
+
 const TABLE_SOURCE_ROWS = [
   { id: 1, employee_code: "EMP-1101", full_name: "Avery Nguyen",   email: "avery.nguyen@psbuniverse.local",   team: "Platform",   role: "admin",   status: "active",    created_at: "2026-03-22" },
   { id: 2, employee_code: "EMP-1102", full_name: "Jordan Patel",   email: "jordan.patel@psbuniverse.local",   team: "Risk",       role: "manager", status: "pending",   created_at: "2026-03-18" },
@@ -59,6 +63,12 @@ const TABLE_SOURCE_ROWS = [
   { id: 4, employee_code: "EMP-1104", full_name: "Morgan Torres",  email: "morgan.torres@psbuniverse.local",  team: "Finance",    role: "viewer",  status: "suspended", created_at: "2026-03-06" },
   { id: 5, employee_code: "EMP-1105", full_name: "Taylor Lopez",   email: "taylor.lopez@psbuniverse.local",   team: "Support",    role: "manager", status: "active",    created_at: "2026-02-28" },
   { id: 6, employee_code: "EMP-1106", full_name: "Casey Johnson",  email: "casey.johnson@psbuniverse.local",  team: "Audit",      role: "analyst", status: "pending",   created_at: "2026-02-21" },
+];
+const SETUP_TABLE_ROWS = [
+  { status_id: "run-queued", status_name: "Queued", status_description: "Waiting to start", display_color: "#64748B", display_order: 10, is_active: true },
+  { status_id: "run-active", status_name: "In Progress", status_description: "Currently running", display_color: "#2563EB", display_order: 20, is_active: true },
+  { status_id: "run-complete", status_name: "Complete", status_description: "Finished successfully", display_color: "#16A34A", display_order: 30, is_active: true },
+  { status_id: "run-paused", status_name: "Paused", status_description: "Temporarily stopped", display_color: "#D97706", display_order: 40, is_active: false },
 ];
 
 // ---------------------------------------------------------------------------
@@ -75,6 +85,7 @@ const SNIPPET_TABLE_BASIC = `import { TableZ } from "@/shared/components/ui";
   state={tableState}
   filterConfig={filterConfig}
   actions={actions}
+  variant="setup"
   loading={loading}
   onChange={handleTableChange}
 />`;
@@ -1563,13 +1574,15 @@ function PlaygroundTab() {
   const [inputValue,     setInputValue]     = useState("Jordan Carter");
   const [inputInvalid,   setInputInvalid]   = useState(false);
   const [searchValue,    setSearchValue]    = useState("");
-  const [dropdownValue,  setDropdownValue]  = useState(null);
-  const [dropdownShow,   setDropdownShow]   = useState(false);
-  const [modalOpen,      setModalOpen]      = useState(false);
+  const [dropdownValue,         setDropdownValue]         = useState(null);
+  const [dropdownShow,          setDropdownShow]          = useState(false);
+  const [multiDropdownValues,   setMultiDropdownValues]   = useState([]);
+  const [modalOpen,             setModalOpen]             = useState(false);
   const [modalSaving,    setModalSaving]    = useState(false);
   const [toastCount,     setToastCount]     = useState(0);
   const [cardModalOpen,  setCardModalOpen]  = useState(false);
   const [copiedIcon,     setCopiedIcon]     = useState(null);
+  const [setupRows,      setSetupRows]      = useState(SETUP_TABLE_ROWS);
 
   const tableColumns = useMemo(() => [
     { key: "employee_code", label: "Code",    sortable: true, width: 130 },
@@ -1586,6 +1599,7 @@ function PlaygroundTab() {
 
   const filterConfig = useMemo(() => createFilterConfig([
     { key: "status",     label: "Status",       type: TABLE_FILTER_TYPES.SELECT,    options: STATUS_OPTIONS },
+    { key: "team",       label: "Team",         type: TABLE_FILTER_TYPES.SELECT,    multiple: true, options: TEAM_OPTIONS },
     { key: "created_at", label: "Created Date", type: TABLE_FILTER_TYPES.DATERANGE },
   ]), []);
 
@@ -1608,10 +1622,54 @@ function PlaygroundTab() {
     },
   ], []);
 
+  const setupColumns = useMemo(() => [
+    { key: "status_name", label: "Status Name", sortable: true, width: 150 },
+    { key: "status_description", label: "Description", sortable: true, width: 220 },
+    {
+      key: "display_color", label: "Color", width: 130,
+      render: (row) => (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: 3, background: row.display_color, border: "1px solid rgba(0,0,0,.15)" }} />
+          <code>{row.display_color}</code>
+        </span>
+      ),
+    },
+    { key: "display_order", label: "Order", sortable: true, width: 90 },
+    {
+      key: "is_active", label: "Active", sortable: true, width: 100,
+      render: (row) => <StatusBadge status={row.is_active ? "active" : "inactive"} />,
+    },
+  ], []);
+
+  const setupActions = useMemo(() => [
+    {
+      key: "edit", label: "Edit", type: "secondary", icon: "pen",
+      onClick: (row) => toastSuccess(`Edit: ${row.status_name}`, "Setup Table"),
+    },
+    {
+      key: "deactivate", label: "Deactivate", type: "secondary", icon: "ban",
+      visible: (row) => row.is_active,
+      onClick: (row) => setSetupRows((previous) => previous.map((item) => item.status_id === row.status_id ? { ...item, is_active: false } : item)),
+    },
+  ], []);
+
+  const handleSetupReorder = useCallback((nextRows) => {
+    setSetupRows(nextRows.map((row, index) => ({ ...row, display_order: (index + 1) * 10 })));
+    toastSuccess("Display order updated.", "Setup Table");
+  }, []);
+
+  const selectedStatusLabels = useMemo(() => {
+    const selectedItems = multiDropdownValues
+      .map((value) => DEMO_STATUS_OPTIONS.find((option) => option.value === value)?.label || value)
+      .filter(Boolean);
+    return selectedItems.length > 0 ? selectedItems.join(", ") : "None";
+  }, [multiDropdownValues]);
+
   const filteredRows = useMemo(() => {
     const f  = tableState.filters || {};
     const sq = normalizeText(f.search);
     const st = normalizeText(f.status);
+    const teamF = f.team;
     const dr = f.created_at || {};
     const start = parseDateOnly(dr.start);
     const end   = parseDateOnly(dr.end);
@@ -1621,6 +1679,16 @@ function PlaygroundTab() {
         if (!hay.includes(sq)) return false;
       }
       if (st && normalizeText(row.status) !== st) return false;
+
+      // Team filter: support single-value and multi-select (array)
+      if (Array.isArray(teamF)) {
+        if (teamF.length > 0) {
+          const allowed = new Set(teamF.map((t) => String(t || "").trim().toLowerCase()));
+          if (!allowed.has(normalizeText(row.team))) return false;
+        }
+      } else if (teamF) {
+        if (normalizeText(row.team) !== normalizeText(teamF)) return false;
+      }
       const d = parseDateOnly(row.created_at);
       if (start && d && d < start) return false;
       if (end   && d && d > end)   return false;
@@ -2132,6 +2200,19 @@ const handleSearch = async (value) => {
           </Dropdown>
           <p style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Selected: <code>{dropdownValue?.label || "None"}</code></p>
 
+          <p className={styles.playLabel} style={{ marginTop: 12 }}>Multi-select Dropdown</p>
+          <MultiSelectDropdown
+            options={DEMO_STATUS_OPTIONS}
+            selectedValues={multiDropdownValues}
+            onChange={setMultiDropdownValues}
+            placeholder="Select statuses"
+            buttonVariant="secondary"
+            buttonSize="sm"
+          />
+          <p style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+            Selected: <code>{selectedStatusLabels}</code>
+          </p>
+
           <p className={styles.playLabel} style={{ marginTop: 12 }}>Action Menu with Divider</p>
           <Dropdown>
             <Dropdown.Toggle variant="secondary" size="sm">Actions</Dropdown.Toggle>
@@ -2478,6 +2559,7 @@ const handleSave = async () => {
             state={tableViewState}
             filterConfig={filterConfig}
             actions={actions}
+            variant="setup"
             loading={false}
             pageSizeOptions={[5, 10, 20]}
             searchPlaceholder="Search code, name, team, role, status"
@@ -2519,8 +2601,41 @@ const actions = [
   state={tableState}
   filterConfig={filterConfig}
   actions={actions}
+  variant="setup"
   loading={loading}
   onChange={handleTableChange}
+/>`} />
+        </div>
+      ),
+    },
+    {
+      key: "play-table-setup",
+      title: "12. TableZ Setup Variant (compact ordered lookup)",
+      content: (
+        <div className={styles.playBody}>
+          <p className={styles.playLabel}>Opt-in setup styling for dense admin tables with custom identity, rendered cells, actions, and reorderable rows.</p>
+          <TableZ
+            data={setupRows}
+            columns={setupColumns}
+            rowIdKey="status_id"
+            actions={setupActions}
+            draggable
+            onReorder={handleSetupReorder}
+            variant="setup"
+            pageSizeOptions={[5, 10]}
+            searchPlaceholder="Search run statuses..."
+            emptyMessage="No run statuses found."
+          />
+          <Snippet title="Setup variant" code={`import { TableZ } from "@/shared/components/ui";
+
+<TableZ
+  data={runStatuses}
+  columns={columns}
+  rowIdKey="status_id"
+  actions={actions}
+  draggable
+  onReorder={handleReorder}
+  variant="setup"
 />`} />
         </div>
       ),
@@ -2548,12 +2663,12 @@ const actions = [
 // ---------------------------------------------------------------------------
 
 const TEAM_OPTIONS = [
-  { label: "Platform",   value: "platform"   },
-  { label: "Risk",       value: "risk"       },
-  { label: "Operations", value: "operations" },
-  { label: "Finance",    value: "finance"    },
-  { label: "Support",    value: "support"    },
-  { label: "Audit",      value: "audit"      },
+  { label: "Platform",   value: "Platform"   },
+  { label: "Risk",       value: "Risk"       },
+  { label: "Operations", value: "Operations" },
+  { label: "Finance",    value: "Finance"    },
+  { label: "Support",    value: "Support"    },
+  { label: "Audit",      value: "Audit"      },
 ];
 
 const ROLE_OPTIONS = [
@@ -3931,6 +4046,12 @@ function TableZTab() {
           TableZ is the full engine. Use it when you need complete control â€” server-side state,
           drag-and-drop, batch editing, master-detail, or custom rendering.
           For simple tables, use TableX instead.
+        </p>
+        <p className={styles.stepNote}>
+          Anatomy: the parent-owned <strong>Page/Main Toolbar</strong>, followed by optional
+          <strong> Batch Toolbar</strong>, <strong>Filter Toolbar</strong>, <strong>Search Toolbar</strong>,
+          the <strong>Table Surface</strong>, and optional <strong>Table Footer</strong>.
+          Use <code>hideSearch</code> or <code>hideFooter</code> when the parent or a nested table provides those controls.
         </p>
       </div>
 
