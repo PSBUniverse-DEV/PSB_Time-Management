@@ -12,20 +12,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
-  faClock,
   faCalendarAlt,
   faChevronLeft,
   faChevronRight,
   faDownload,
   faSearch,
   faPen,
-  faGaugeHigh,
-  faClockRotateLeft,
   faTable,
-  faListCheck,
-  faUser,
-  faBook,
+  faRightToBracket,
+  faRightFromBracket,
 } from "@fortawesome/free-solid-svg-icons";
+
+// Auth utilities for the login/logout button
+import { useAuth } from "@/core/auth/useAuth";
+import { logout as ssoLogout, redirectToLogin } from "@/core/sso-client";
+import { getSupabase } from "@/core/supabase/client";
 
 // Module styles
 import "../timeTracker.css";
@@ -35,12 +36,7 @@ import "../timeTracker.css";
 // ═══════════════════════════════════════════════════════════════
 
 const NAV_ITEMS = [
-  { key: "dashboard", label: "Dashboard", icon: faGaugeHigh },
-  { key: "clock", label: "Clock", icon: faClock },
   { key: "logs", label: "Logs", icon: faTable },
-  { key: "tasks", label: "Tasks", icon: faListCheck },
-  { key: "profile", label: "Profile", icon: faUser },
-  { key: "instructions", label: "Instructions", icon: faBook },
 ];
 
 const DAYS_OF_WEEK = [
@@ -203,7 +199,72 @@ function Sidebar({ currentTime, activeNav, onNavChange }) {
         <div className="tt-sidebar-status-label">NOT CLOCKED IN</div>
         <div className="tt-sidebar-status-meta">Last clock in: 08:59 PM</div>
       </div>
+
+      {/* Login / Logout */}
+      <AuthButton />
     </aside>
+  );
+}
+
+// ─── Login / Logout Button ──────────────────────────────────
+
+/**
+ * Sidebar login/logout toggle.
+ *
+ * Shows "Logout" when the current user is authenticated and "Login"
+ * otherwise. Logout signs the user out of Supabase, performs the
+ * universal SSO logout, clears the local access token, and sends the
+ * user back to the login page. Login simply redirects to the login page.
+ */
+function AuthButton() {
+  const { authUser, loading } = useAuth();
+  const [busy, setBusy] = useState(false);
+
+  const isAuthenticated = Boolean(authUser);
+
+  async function handleLogout() {
+    setBusy(true);
+
+    try {
+      // Universal SSO logout across all PSBUniverse modules.
+      await ssoLogout();
+    } catch {
+      // Ignore SSO logout failure — continue with local cleanup.
+    }
+
+    try {
+      const supabase = getSupabase();
+      await supabase.auth.signOut();
+    } catch {
+      // Ignore Supabase sign-out failure — continue with cleanup.
+    }
+
+    // Clear the local access token cookie immediately.
+    if (typeof document !== "undefined") {
+      document.cookie = "sb-access-token=; Path=/; Max-Age=0; SameSite=Lax";
+    }
+
+    setBusy(false);
+    redirectToLogin();
+  }
+
+  function handleLogin() {
+    redirectToLogin();
+  }
+
+  return (
+    <button
+      type="button"
+      className="tt-auth-btn"
+      onClick={isAuthenticated ? handleLogout : handleLogin}
+      disabled={busy || loading}
+    >
+      <FontAwesomeIcon
+        icon={isAuthenticated ? faRightFromBracket : faRightToBracket}
+        className="tt-nav-icon"
+      />
+      {isAuthenticated ? (busy ? "Signing out..." : "Logout") : "Login"}
+    </button>
   );
 }
 
