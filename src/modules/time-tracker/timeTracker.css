@@ -186,34 +186,9 @@
   margin-top: 0.2rem;
 }
 
-/* ─── Login / Logout Button (Sidebar Footer) ─────────────── */
-.tt-auth-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  width: 100%;
-  margin-top: 0.75rem;
-  padding: 0.6rem 0.85rem;
-  border-radius: 10px;
-  font-family: 'Inter', sans-serif;
-  font-size: 13px;
-  font-weight: 600;
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1.5px solid rgba(255, 255, 255, 0.35);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.tt-auth-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.6);
-}
-
-.tt-auth-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
+/* Clocked-in status uses a green label instead of the orange default. */
+.tt-sidebar-status-label.clocked-in {
+  color: #4ade80;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -229,7 +204,54 @@
 
 /* ─── Page Header ───────────────────────────────────────── */
 .tt-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
   margin-bottom: 1.5rem;
+}
+
+.tt-page-header-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ─── Time In / Time Out Button ─────────────────────────── */
+.tt-clock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.5rem;
+  border-radius: 999px;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  background: #2d6a4f;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+}
+
+.tt-clock-btn:hover {
+  filter: brightness(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+}
+
+.tt-clock-btn.clocked-in {
+  background: #e8602a;
+}
+
+.tt-clock-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.tt-clock-btn-icon {
+  font-size: 14px;
 }
 
 .tt-page-title {

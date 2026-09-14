@@ -9,27 +9,26 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
-  faCalendarAlt,
   faChevronLeft,
   faChevronRight,
   faDownload,
-  faSearch,
   faPen,
   faTable,
-  faRightToBracket,
-  faRightFromBracket,
+  faClock,
 } from "@fortawesome/free-solid-svg-icons";
-
-// Auth utilities for the login/logout button
-import { useAuth } from "@/core/auth/useAuth";
-import { logout as ssoLogout, redirectToLogin } from "@/core/sso-client";
-import { getSupabase } from "@/core/supabase/client";
 
 // Module styles
 import "../timeTracker.css";
+
+// Server actions for loading logs + clock in/out
+import {
+  clockIn as clockInAction,
+  clockOut as clockOutAction,
+  loadTimeTrackerData,
+} from "../data/timeTracker.actions";
 
 // ═══════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -49,20 +48,80 @@ const DAYS_OF_WEEK = [
   "Sunday",
 ];
 
+// Browser's IANA timezone (e.g. "America/Chicago"). Passed to clock in/out so
+// timestamps are written in the user's local time rather than the server's.
+const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/**
+ * Format a Date into a human-readable clock time (e.g. "08:59 PM").
+ * Used to display the most recent clock-in time on the sidebar status card.
+ */
+function formatClockTime(date) {
+  if (!date) return "--";
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/**
+ * Local date as YYYY-MM-DD (matches the server actions' date format).
+ */
+function toDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Format a "YYYY-MM-DD" date string for display (e.g. "Sep 9, 2026").
+ */
+function formatDateDisplay(dateStr) {
+  if (!dateStr) return "--";
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/**
+ * Format an "HH:MM:SS" time string into a 12-hour display (e.g. "8:59 AM").
+ */
+function formatTimeDisplay(timeStr) {
+  if (!timeStr) return "--";
+  const [hStr, mStr] = timeStr.split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 || 12;
+  return `${hour12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // HOOK: useLogsPage
 // ═══════════════════════════════════════════════════════════════
 
-function useLogsPage() {
+function useLogsPage(initialData) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeNav, setActiveNav] = useState("logs");
   const [weekOffset, setWeekOffset] = useState(0);
 
+  // Clock session state — seeded from server data, then kept in sync after
+  // each clock-in / clock-out action below.
+  const [clockedIn, setClockedIn] = useState(Boolean(initialData?.clockedIn));
+  const [openLogId, setOpenLogId] = useState(initialData?.openLogId ?? null);
+  const [lastClockIn, setLastClockIn] = useState(
+    initialData?.lastClockIn ? new Date(initialData.lastClockIn) : null
+  );
+  const [toggling, setToggling] = useState(false);
+  const [weekLogs, setWeekLogs] = useState(initialData?.logs || []);
+
   // Live clock tick
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
+    const interval = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -70,18 +129,13 @@ function useLogsPage() {
   const weekRange = useMemo(() => {
     const now = new Date();
     const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, ...
-    // Get the Monday of the current week (adjusted by weekOffset)
     const monday = new Date(now);
     monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
 
     const formatDate = (d) =>
-      d.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
+      d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
     return {
       start: monday,
@@ -91,42 +145,82 @@ function useLogsPage() {
     };
   }, [weekOffset]);
 
-  // Generate week rows (7 days, all empty — no mocked data)
+  // Refetch logs whenever the visible week changes. The first render is
+  // skipped because that data already arrived from the server via initialData.
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    let cancelled = false;
+    loadTimeTrackerData(toDateStr(weekRange.start), toDateStr(weekRange.end)).then((data) => {
+      if (!cancelled) setWeekLogs(data.logs || []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [weekRange]);
+
+  // Map the current week's logs onto the seven day rows for the table.
   const weekRows = useMemo(() => {
     const monday = weekRange.start;
+    const logsByDate = new Map(weekLogs.map((log) => [log.clock_in_date, log]));
     return DAYS_OF_WEEK.map((dayName, index) => {
       const date = new Date(monday);
       date.setDate(monday.getDate() + index);
-      const dateStr = date.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
+      const log = logsByDate.get(toDateStr(date));
       return {
         id: `day-${index}`,
         dayName,
-        date: dateStr,
-        clockedInDate: null,
-        clockedInTime: null,
-        clockedOutDate: null,
-        clockedOutTime: null,
-        hours: null,
-        hasData: false,
+        date: date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        clockedInDate: log ? formatDateDisplay(log.clock_in_date) : null,
+        clockedInTime: log ? formatTimeDisplay(log.clock_in_time) : null,
+        clockedOutDate: log?.clock_out_date ? formatDateDisplay(log.clock_out_date) : null,
+        clockedOutTime: log?.clock_out_time ? formatTimeDisplay(log.clock_out_time) : null,
+        hours: log?.total_hours ?? null,
+        hasData: Boolean(log),
+        logId: log?.log_id ?? null,
       };
     });
-  }, [weekRange]);
+  }, [weekRange, weekLogs]);
 
-  const goPreviousWeek = useCallback(() => {
-    setWeekOffset((prev) => prev - 1);
-  }, []);
+  const goPreviousWeek = useCallback(() => setWeekOffset((prev) => prev - 1), []);
+  const goNextWeek = useCallback(() => setWeekOffset((prev) => prev + 1), []);
+  const goThisWeek = useCallback(() => setWeekOffset(0), []);
 
-  const goNextWeek = useCallback(() => {
-    setWeekOffset((prev) => prev + 1);
-  }, []);
-
-  const goThisWeek = useCallback(() => {
-    setWeekOffset(0);
-  }, []);
+  // Clock in/out against the database via server actions.
+  const handleClockToggle = useCallback(async () => {
+    if (toggling) return;
+    setToggling(true);
+    try {
+      if (!clockedIn) {
+        const result = await clockInAction(LOCAL_TIMEZONE);
+        if (result.success) {
+          setClockedIn(true);
+          setOpenLogId(result.record.log_id);
+          setLastClockIn(new Date(`${result.record.clock_in_date}T${result.record.clock_in_time}`));
+          setWeekLogs((prev) => [...prev.filter((l) => l.log_id !== result.record.log_id), result.record]);
+        } else {
+          alert(result.error || "Failed to clock in.");
+        }
+      } else {
+        const result = await clockOutAction(openLogId, LOCAL_TIMEZONE);
+        if (result.success) {
+          setClockedIn(false);
+          setOpenLogId(null);
+          setWeekLogs((prev) => prev.map((l) => (l.log_id === result.record.log_id ? result.record : l)));
+        } else {
+          alert(result.error || "Failed to clock out.");
+        }
+      }
+    } catch (err) {
+      console.error("Clock toggle failed:", err);
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setToggling(false);
+    }
+  }, [clockedIn, openLogId, toggling]);
 
   return {
     currentTime,
@@ -138,6 +232,10 @@ function useLogsPage() {
     goNextWeek,
     goThisWeek,
     weekOffset,
+    clockedIn,
+    lastClockIn,
+    handleClockToggle,
+    toggling,
   };
 }
 
@@ -147,7 +245,7 @@ function useLogsPage() {
 
 // ─── Sidebar ──────────────────────────────────────────────────
 
-function Sidebar({ currentTime, activeNav, onNavChange }) {
+function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn }) {
   const timeStr = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -164,15 +262,6 @@ function Sidebar({ currentTime, activeNav, onNavChange }) {
 
   return (
     <aside className="tt-sidebar">
-      {/* Brand */}
-      <div className="tt-sidebar-brand">
-        <div className="tt-logo">PSB</div>
-        <div className="tt-brand-text">
-          <div className="tt-brand-title">Time Tracker</div>
-          <div className="tt-brand-subtitle">OFFLINE DESKTOP LOGGING</div>
-        </div>
-      </div>
-
       {/* Digital Clock */}
       <div className="tt-sidebar-clock-card">
         <div className="tt-sidebar-clock-time">{timeStr}</div>
@@ -196,115 +285,37 @@ function Sidebar({ currentTime, activeNav, onNavChange }) {
 
       {/* Clock Status */}
       <div className="tt-sidebar-status-card">
-        <div className="tt-sidebar-status-label">NOT CLOCKED IN</div>
-        <div className="tt-sidebar-status-meta">Last clock in: 08:59 PM</div>
+        <div className={`tt-sidebar-status-label ${clockedIn ? "clocked-in" : ""}`}>
+          {clockedIn ? "CLOCKED IN" : "NOT CLOCKED IN"}
+        </div>
+        <div className="tt-sidebar-status-meta">
+          {lastClockIn ? `Last clock in: ${formatClockTime(lastClockIn)}` : "Not clocked in yet"}
+        </div>
       </div>
-
-      {/* Login / Logout */}
-      <AuthButton />
     </aside>
   );
 }
 
-// ─── Login / Logout Button ──────────────────────────────────
+// ─── Time In / Time Out Button ─────────────────────────────
 
 /**
- * Sidebar login/logout toggle.
+ * Primary clock-in / clock-out action for the Logs page.
  *
- * Shows "Logout" when the current user is authenticated and "Login"
- * otherwise. Logout signs the user out of Supabase, performs the
- * universal SSO logout, clears the local access token, and sends the
- * user back to the login page. Login simply redirects to the login page.
+ * Shows "Time In" while the user is not clocked in and "Time Out" once
+ * they are. The change is persisted by the parent hook through a server
+ * action, and the button is disabled while that request is in flight.
  */
-function AuthButton() {
-  const { authUser, loading } = useAuth();
-  const [busy, setBusy] = useState(false);
-
-  const isAuthenticated = Boolean(authUser);
-
-  async function handleLogout() {
-    setBusy(true);
-
-    try {
-      // Universal SSO logout across all PSBUniverse modules.
-      await ssoLogout();
-    } catch {
-      // Ignore SSO logout failure — continue with local cleanup.
-    }
-
-    try {
-      const supabase = getSupabase();
-      await supabase.auth.signOut();
-    } catch {
-      // Ignore Supabase sign-out failure — continue with cleanup.
-    }
-
-    // Clear the local access token cookie immediately.
-    if (typeof document !== "undefined") {
-      document.cookie = "sb-access-token=; Path=/; Max-Age=0; SameSite=Lax";
-    }
-
-    setBusy(false);
-    redirectToLogin();
-  }
-
-  function handleLogin() {
-    redirectToLogin();
-  }
-
+function TimeInOutButton({ clockedIn, onToggle, disabled }) {
   return (
     <button
       type="button"
-      className="tt-auth-btn"
-      onClick={isAuthenticated ? handleLogout : handleLogin}
-      disabled={busy || loading}
+      className={`tt-clock-btn ${clockedIn ? "clocked-in" : ""}`}
+      onClick={onToggle}
+      disabled={disabled}
     >
-      <FontAwesomeIcon
-        icon={isAuthenticated ? faRightFromBracket : faRightToBracket}
-        className="tt-nav-icon"
-      />
-      {isAuthenticated ? (busy ? "Signing out..." : "Logout") : "Login"}
+      <FontAwesomeIcon icon={faClock} className="tt-clock-btn-icon" />
+      {clockedIn ? "Time Out" : "Time In"}
     </button>
-  );
-}
-
-// ─── Filter Card ──────────────────────────────────────────────
-
-function FilterCard() {
-  return (
-    <div className="tt-filter-card">
-      <div className="tt-filter-row">
-        <div className="tt-filter-group">
-          <label className="tt-filter-label">Start Date</label>
-          <div className="tt-filter-input-wrapper">
-            <FontAwesomeIcon icon={faCalendarAlt} className="tt-filter-input-icon" />
-            <input
-              type="text"
-              className="tt-filter-input"
-              placeholder="dd/mm/yyyy"
-              readOnly
-            />
-          </div>
-        </div>
-
-        <div className="tt-filter-group">
-          <label className="tt-filter-label">End Date</label>
-          <div className="tt-filter-input-wrapper">
-            <FontAwesomeIcon icon={faCalendarAlt} className="tt-filter-input-icon" />
-            <input
-              type="text"
-              className="tt-filter-input"
-              placeholder="dd/mm/yyyy"
-              readOnly
-            />
-          </div>
-        </div>
-
-        <button type="button" className="tt-btn-view">
-          View
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -317,15 +328,6 @@ function LogsToolbar() {
         <FontAwesomeIcon icon={faDownload} />
         Export All Logs
       </button>
-
-      <div className="tt-search-wrapper">
-        <FontAwesomeIcon icon={faSearch} className="tt-search-icon" />
-        <input
-          type="text"
-          className="tt-search-input"
-          placeholder="Search Clock In Date"
-        />
-      </div>
     </div>
   );
 }
@@ -454,7 +456,7 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════
 
-export default function TimeTrackerView() {
+export default function TimeTrackerView({ initialData }) {
   const {
     currentTime,
     activeNav,
@@ -465,7 +467,11 @@ export default function TimeTrackerView() {
     goNextWeek,
     goThisWeek,
     weekOffset,
-  } = useLogsPage();
+    clockedIn,
+    lastClockIn,
+    handleClockToggle,
+    toggling,
+  } = useLogsPage(initialData);
 
   return (
     <div className="tt-app-layout">
@@ -474,18 +480,20 @@ export default function TimeTrackerView() {
         currentTime={currentTime}
         activeNav={activeNav}
         onNavChange={setActiveNav}
+        clockedIn={clockedIn}
+        lastClockIn={lastClockIn}
       />
 
       {/* Main Content */}
       <main className="tt-main">
         {/* Page Header */}
         <div className="tt-page-header">
-          <h1 className="tt-page-title">Logs</h1>
-          <p className="tt-page-subtitle">Review and export your time logs.</p>
+          <div className="tt-page-header-text">
+            <h1 className="tt-page-title">Logs</h1>
+            <p className="tt-page-subtitle">Review and export your time logs.</p>
+          </div>
+          <TimeInOutButton clockedIn={clockedIn} onToggle={handleClockToggle} disabled={toggling} />
         </div>
-
-        {/* Filter Card */}
-        <FilterCard />
 
         {/* Toolbar */}
         <LogsToolbar />
