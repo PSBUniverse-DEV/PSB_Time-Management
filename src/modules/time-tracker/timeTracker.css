@@ -917,6 +917,7 @@
   min-height: calc(100vh - 60px);
   background: var(--tt-app-bg);
   color: #1a2e33;
+  zoom: 0.66;
 }
 
 .tt-sidebar {

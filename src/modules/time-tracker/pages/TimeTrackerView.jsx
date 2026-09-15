@@ -435,8 +435,8 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
         <thead>
           <tr>
             <th>Day</th>
-            <th>Clocked In</th>
-            <th>Clocked Out</th>
+            <th>Clocked In (Date & Time)</th>
+            <th>Clocked Out (Date & Time)</th>
             <th>Hours</th>
             <th>Action</th>
           </tr>
@@ -458,16 +458,12 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
               <td>
                 {row.hasData ? (
                   <div className="tt-clock-cell">
-                    <span className="tt-clock-label">Date Clocked In</span>
                     <span className="tt-clock-value">{row.clockedInDate}</span>
-                    <span className="tt-clock-label" style={{ marginTop: "2px" }}>Clock In Time</span>
                     <span className="tt-clock-value">{row.clockedInTime}</span>
                   </div>
                 ) : (
                   <div className="tt-clock-cell">
-                    <span className="tt-clock-label">Date Clocked In</span>
                     <span className="tt-clock-value subtle tt-placeholder">--</span>
-                    <span className="tt-clock-label" style={{ marginTop: "2px" }}>Clock In Time</span>
                     <span className="tt-clock-value subtle tt-placeholder">--</span>
                   </div>
                 )}
@@ -477,16 +473,12 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
               <td>
                 {row.hasData ? (
                   <div className="tt-clock-cell">
-                    <span className="tt-clock-label">Date Clocked Out</span>
                     <span className="tt-clock-value">{row.clockedOutDate}</span>
-                    <span className="tt-clock-label" style={{ marginTop: "2px" }}>Clock Out Time</span>
                     <span className="tt-clock-value">{row.clockedOutTime}</span>
                   </div>
                 ) : (
                   <div className="tt-clock-cell">
-                    <span className="tt-clock-label">Date Clocked Out</span>
                     <span className="tt-clock-value subtle tt-placeholder">--</span>
-                    <span className="tt-clock-label" style={{ marginTop: "2px" }}>Clock Out Time</span>
                     <span className="tt-clock-value subtle tt-placeholder">--</span>
                   </div>
                 )}
