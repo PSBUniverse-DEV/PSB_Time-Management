@@ -35,5 +35,5 @@ CREATE TABLE time_t_logs (
 create index IF not exists idx_timelog_user_clockin on public.time_t_logs using btree (user_id, clock_in_date) TABLESPACE pg_default;
 
 
-========================================
+============================================================
 

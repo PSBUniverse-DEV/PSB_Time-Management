@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { StatusBadge, toastError, toastWarning } from "@/shared/components/ui";
 import {
   faChevronLeft,
   faChevronRight,
@@ -18,25 +19,36 @@ import {
   faPen,
   faTable,
   faClock,
+  faFileInvoiceDollar,
+  faStamp,
 } from "@fortawesome/free-solid-svg-icons";
 
 // Module styles
 import "../timeTracker.css";
 
-// Server actions for loading logs + clock in/out
+// Server actions for loading logs + clock in/clock out
 import {
   clockIn as clockInAction,
   clockOut as clockOutAction,
   loadTimeTrackerData,
 } from "../data/timeTracker.actions";
+import { getTimeTrackerPermissions } from "../data/timeTracker.permissions";
 
 // ═══════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════
 
-const NAV_ITEMS = [
-  { key: "logs", label: "Logs", icon: faTable },
-];
+function buildNavItems(permissions) {
+  const items = [];
+  if (permissions.canViewLogsTab) items.push({ key: "logs", label: "Logs", icon: faTable });
+  if (permissions.canViewTimesheetsTab) {
+    items.push({ key: "timesheets", label: "Timesheets", icon: faFileInvoiceDollar });
+  }
+  if (permissions.canViewApprovalsTab) {
+    items.push({ key: "approvals", label: "Approvals", icon: faStamp });
+  }
+  return items;
+}
 
 const DAYS_OF_WEEK = [
   "Monday",
@@ -48,7 +60,7 @@ const DAYS_OF_WEEK = [
   "Sunday",
 ];
 
-// Browser's IANA timezone (e.g. "America/Chicago"). Passed to clock in/out so
+// Browser's IANA timezone (e.g. "America/Chicago"). Passed to clock in/clock out so
 // timestamps are written in the user's local time rather than the server's.
 const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -104,9 +116,10 @@ function formatTimeDisplay(timeStr) {
 // HOOK: useLogsPage
 // ═══════════════════════════════════════════════════════════════
 
-function useLogsPage(initialData) {
+function useLogsPage(initialData, permissions) {
+  const navItems = useMemo(() => buildNavItems(permissions), [permissions]);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [activeNav, setActiveNav] = useState("logs");
+  const [activeNav, setActiveNav] = useState(navItems[0]?.key || "logs");
   const [weekOffset, setWeekOffset] = useState(0);
 
   // Clock session state — seeded from server data, then kept in sync after
@@ -117,6 +130,7 @@ function useLogsPage(initialData) {
     initialData?.lastClockIn ? new Date(initialData.lastClockIn) : null
   );
   const [toggling, setToggling] = useState(false);
+  const [weekLoading, setWeekLoading] = useState(false);
   const [weekLogs, setWeekLogs] = useState(initialData?.logs || []);
 
   // Live clock tick
@@ -154,9 +168,17 @@ function useLogsPage(initialData) {
       return;
     }
     let cancelled = false;
-    loadTimeTrackerData(toDateStr(weekRange.start), toDateStr(weekRange.end)).then((data) => {
-      if (!cancelled) setWeekLogs(data.logs || []);
-    });
+    setWeekLoading(true);
+    loadTimeTrackerData(toDateStr(weekRange.start), toDateStr(weekRange.end))
+      .then((data) => {
+        if (!cancelled) setWeekLogs(data.logs || []);
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load this week's time logs.", "Time Logs");
+      })
+      .finally(() => {
+        if (!cancelled) setWeekLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -166,14 +188,18 @@ function useLogsPage(initialData) {
   const weekRows = useMemo(() => {
     const monday = weekRange.start;
     const logsByDate = new Map(weekLogs.map((log) => [log.clock_in_date, log]));
+    const today = toDateStr(new Date());
     return DAYS_OF_WEEK.map((dayName, index) => {
       const date = new Date(monday);
       date.setDate(monday.getDate() + index);
-      const log = logsByDate.get(toDateStr(date));
+      const rowDate = toDateStr(date);
+      const log = logsByDate.get(rowDate);
       return {
         id: `day-${index}`,
         dayName,
         date: date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        shortDate: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        isToday: rowDate === today,
         clockedInDate: log ? formatDateDisplay(log.clock_in_date) : null,
         clockedInTime: log ? formatTimeDisplay(log.clock_in_time) : null,
         clockedOutDate: log?.clock_out_date ? formatDateDisplay(log.clock_out_date) : null,
@@ -185,11 +211,16 @@ function useLogsPage(initialData) {
     });
   }, [weekRange, weekLogs]);
 
+  const totalHours = useMemo(
+    () => weekRows.reduce((total, row) => total + (Number(row.hours) || 0), 0),
+    [weekRows],
+  );
+
   const goPreviousWeek = useCallback(() => setWeekOffset((prev) => prev - 1), []);
   const goNextWeek = useCallback(() => setWeekOffset((prev) => prev + 1), []);
   const goThisWeek = useCallback(() => setWeekOffset(0), []);
 
-  // Clock in/out against the database via server actions.
+  // Clock in/clock out against the database via server actions.
   const handleClockToggle = useCallback(async () => {
     if (toggling) return;
     setToggling(true);
@@ -202,7 +233,12 @@ function useLogsPage(initialData) {
           setLastClockIn(new Date(`${result.record.clock_in_date}T${result.record.clock_in_time}`));
           setWeekLogs((prev) => [...prev.filter((l) => l.log_id !== result.record.log_id), result.record]);
         } else {
-          alert(result.error || "Failed to clock in.");
+          const message = result.error || "Failed to clock in.";
+          if (message.toLowerCase().includes("already")) {
+            toastWarning(message, "Clock Status");
+          } else {
+            toastError(message, "Clock In");
+          }
         }
       } else {
         const result = await clockOutAction(openLogId, LOCAL_TIMEZONE);
@@ -211,12 +247,17 @@ function useLogsPage(initialData) {
           setOpenLogId(null);
           setWeekLogs((prev) => prev.map((l) => (l.log_id === result.record.log_id ? result.record : l)));
         } else {
-          alert(result.error || "Failed to clock out.");
+          const message = result.error || "Failed to clock out.";
+          if (message.toLowerCase().includes("already")) {
+            toastWarning(message, "Clock Status");
+          } else {
+            toastError(message, "Clock Out");
+          }
         }
       }
     } catch (err) {
       console.error("Clock toggle failed:", err);
-      alert("Something went wrong. Please try again.");
+      toastError("Something went wrong. Please try again.", "Time Tracker");
     } finally {
       setToggling(false);
     }
@@ -226,17 +267,29 @@ function useLogsPage(initialData) {
     currentTime,
     activeNav,
     setActiveNav,
+    navItems,
     weekRange,
     weekRows,
     goPreviousWeek,
     goNextWeek,
     goThisWeek,
     weekOffset,
+    weekLoading,
+    totalHours,
     clockedIn,
     lastClockIn,
     handleClockToggle,
     toggling,
   };
+}
+
+function LoadingPanel({ message }) {
+  return (
+    <div className="tt-loading-panel" role="status" aria-live="polite">
+      <span className="tt-loading-spinner" aria-hidden="true" />
+      <span>{message}</span>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -245,7 +298,7 @@ function useLogsPage(initialData) {
 
 // ─── Sidebar ──────────────────────────────────────────────────
 
-function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn }) {
+function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn, navItems, onToggle, disabled }) {
   const timeStr = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -261,16 +314,28 @@ function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn }
   });
 
   return (
-    <aside className="tt-sidebar">
+    <header className="tt-sidebar">
+      <div className="tt-module-identity">
+        <span className="tt-module-mark" aria-hidden="true">
+          TT
+        </span>
+        <div>
+          <div className="tt-module-title">Time Tracker</div>
+          <div className="tt-module-caption">Workday activity</div>
+        </div>
+      </div>
+
       {/* Digital Clock */}
       <div className="tt-sidebar-clock-card">
         <div className="tt-sidebar-clock-time">{timeStr}</div>
         <div className="tt-sidebar-clock-date">{dateStr}</div>
       </div>
+      
+      <TimeInOutButton clockedIn={clockedIn} onToggle={onToggle} disabled={disabled} />
 
       {/* Navigation */}
       <nav className="tt-sidebar-nav">
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <button
             key={item.key}
             type="button"
@@ -285,26 +350,20 @@ function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn }
 
       {/* Clock Status */}
       <div className="tt-sidebar-status-card">
-        <div className={`tt-sidebar-status-label ${clockedIn ? "clocked-in" : ""}`}>
-          {clockedIn ? "CLOCKED IN" : "NOT CLOCKED IN"}
-        </div>
+        <StatusBadge
+          status={clockedIn ? "active" : "inactive"}
+          label={clockedIn ? "Clocked In" : "Not Clocked In"}
+          className="tt-status-badge"
+        />
         <div className="tt-sidebar-status-meta">
           {lastClockIn ? `Last clock in: ${formatClockTime(lastClockIn)}` : "Not clocked in yet"}
         </div>
       </div>
-    </aside>
+
+    </header>
   );
 }
 
-// ─── Time In / Time Out Button ─────────────────────────────
-
-/**
- * Primary clock-in / clock-out action for the Logs page.
- *
- * Shows "Time In" while the user is not clocked in and "Time Out" once
- * they are. The change is persisted by the parent hook through a server
- * action, and the button is disabled while that request is in flight.
- */
 function TimeInOutButton({ clockedIn, onToggle, disabled }) {
   return (
     <button
@@ -314,12 +373,10 @@ function TimeInOutButton({ clockedIn, onToggle, disabled }) {
       disabled={disabled}
     >
       <FontAwesomeIcon icon={faClock} className="tt-clock-btn-icon" />
-      {clockedIn ? "Time Out" : "Time In"}
+      {clockedIn ? "Clock Out" : "Clock In"}
     </button>
   );
 }
-
-// ─── Logs Toolbar ─────────────────────────────────────────────
 
 function LogsToolbar() {
   return (
@@ -332,9 +389,10 @@ function LogsToolbar() {
   );
 }
 
+
 // ─── Time Log Table ───────────────────────────────────────────
 
-function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek, weekOffset }) {
+function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek, weekOffset, loading, totalHours }) {
   return (
     <div className="tt-table-card">
       {/* Table Header */}
@@ -348,7 +406,10 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
           >
             <FontAwesomeIcon icon={faChevronLeft} />
           </button>
-          <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
+          <h3 className="tt-table-title">
+            <span>Time Log for</span>
+            <strong>{weekRange.label.replace(" - ", " – ")}</strong>
+          </h3>
           <button
             type="button"
             className="tt-nav-arrow"
@@ -366,10 +427,11 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
         >
           This Week
         </button>
+        <LogsToolbar />
+
       </div>
 
-      {/* Table */}
-      <table className="tt-table-grid">
+      {loading ? <LoadingPanel message="Loading time logs..." /> : <table className="tt-table-grid">
         <thead>
           <tr>
             <th>Day</th>
@@ -383,8 +445,13 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
           {weekRows.map((row) => (
             <tr key={row.id}>
               {/* Day */}
-              <td>
-                <span className="tt-day-cell">{row.dayName}</span>
+              <td className={`tt-day-cell-wrap ${row.isToday ? "is-today" : ""}`}>
+                <div className="tt-day-cell-line">
+                  <span className="tt-day-marker" aria-hidden="true" />
+                  <span className="tt-day-cell">{row.dayName}</span>
+                  {row.isToday && <span className="tt-today-badge">Today</span>}
+                </div>
+                <span className="tt-day-date">{row.shortDate}</span>
               </td>
 
               {/* Clocked In */}
@@ -428,7 +495,7 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
               {/* Hours */}
               <td>
                 {row.hasData ? (
-                  <span className="tt-hours-cell">{row.hours}</span>
+                  <span className="tt-hours-cell">{Number(row.hours).toFixed(2)}</span>
                 ) : (
                   <span className="tt-hours-cell tt-placeholder">--</span>
                 )}
@@ -447,7 +514,18 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
             </tr>
           ))}
         </tbody>
-      </table>
+      </table>}
+      <div className="tt-table-summary">
+        <div className="tt-summary-metrics">
+          <div><span>Regular Hours:</span><strong>{totalHours.toFixed(2)} hrs</strong></div>
+          <div><span>Overtime:</span><strong className="tt-summary-positive">0.00 hrs</strong></div>
+          <div><span>Total Logged:</span><strong>{totalHours.toFixed(2)} hrs</strong></div>
+        </div>
+        <div className="tt-summary-actions">
+          <button type="button" className="tt-btn-draft" disabled>Save as Draft</button>
+          <button type="button" className="tt-btn-submit" disabled>Submit Timesheet for Approval</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -457,21 +535,28 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
 // ═══════════════════════════════════════════════════════════════
 
 export default function TimeTrackerView({ initialData }) {
+  const permissions = useMemo(
+    () => getTimeTrackerPermissions(initialData?.roles, initialData?.orgRoles),
+    [initialData?.roles, initialData?.orgRoles],
+  );
   const {
     currentTime,
     activeNav,
     setActiveNav,
+    navItems,
     weekRange,
     weekRows,
     goPreviousWeek,
     goNextWeek,
     goThisWeek,
     weekOffset,
+    weekLoading,
+    totalHours,
     clockedIn,
     lastClockIn,
     handleClockToggle,
     toggling,
-  } = useLogsPage(initialData);
+  } = useLogsPage(initialData, permissions);
 
   return (
     <div className="tt-app-layout">
@@ -482,31 +567,46 @@ export default function TimeTrackerView({ initialData }) {
         onNavChange={setActiveNav}
         clockedIn={clockedIn}
         lastClockIn={lastClockIn}
+        navItems={navItems}
+        onToggle={handleClockToggle}
+        disabled={toggling}
       />
 
       {/* Main Content */}
       <main className="tt-main">
-        {/* Page Header */}
-        <div className="tt-page-header">
-          <div className="tt-page-header-text">
-            <h1 className="tt-page-title">Logs</h1>
-            <p className="tt-page-subtitle">Review and export your time logs.</p>
+        {activeNav === "logs" && (
+          <>
+            {toggling && <LoadingPanel message={clockedIn ? "Clocking out..." : "Clocking in..."} />}
+            <TimeLogTable
+              weekRange={weekRange}
+              weekRows={weekRows}
+              onPrevWeek={goPreviousWeek}
+              onNextWeek={goNextWeek}
+              onThisWeek={goThisWeek}
+              weekOffset={weekOffset}
+              loading={weekLoading}
+              totalHours={totalHours}
+            />
+          </>
+        )}
+
+        {activeNav === "timesheets" && (
+          <div className="tt-page-header">
+            <div className="tt-page-header-text">
+              <h1 className="tt-page-title">Timesheets</h1>
+              <p className="tt-page-subtitle">View, edit, and print employee timesheets. Coming soon.</p>
+            </div>
           </div>
-          <TimeInOutButton clockedIn={clockedIn} onToggle={handleClockToggle} disabled={toggling} />
-        </div>
+        )}
 
-        {/* Toolbar */}
-        <LogsToolbar />
-
-        {/* Time Log Table */}
-        <TimeLogTable
-          weekRange={weekRange}
-          weekRows={weekRows}
-          onPrevWeek={goPreviousWeek}
-          onNextWeek={goNextWeek}
-          onThisWeek={goThisWeek}
-          weekOffset={weekOffset}
-        />
+        {activeNav === "approvals" && (
+          <div className="tt-page-header">
+            <div className="tt-page-header-text">
+              <h1 className="tt-page-title">Approvals</h1>
+              <p className="tt-page-subtitle">Approve or return submitted timesheets. Coming soon.</p>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

@@ -10,26 +10,61 @@
    APP LAYOUT — Sidebar + Main
    ═══════════════════════════════════════════════════════════ */
 .tt-app-layout {
-  display: flex;
-  min-height: 100vh;
+  min-height: calc(100vh - 70px);
   background: #f5f7fa;
 }
 
-/* ─── Sidebar ───────────────────────────────────────────── */
+/* ─── Module Header ─────────────────────────────────────── */
 .tt-sidebar {
-  width: 260px;
-  min-width: 260px;
-  background: linear-gradient(180deg, #1e4c5c 0%, #163a47 100%);
+  width: 100%;
+  min-width: 0;
+  min-height: 76px;
+  background: #ffffff;
   display: flex;
-  flex-direction: column;
-  padding: 1.5rem 1rem;
-  position: fixed;
-  top: 60px;
-  left: 20px;
-  height: calc(100vh - 70px);
-  overflow-y: auto;
-  z-index: 100;
-  border-radius: 12px 12px 12px 12px;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.85rem clamp(1rem, 4vw, 3rem);
+  border-bottom: 1px solid #dce3ed;
+  box-shadow: 0 2px 12px rgba(26, 43, 60, 0.05);
+}
+
+.tt-module-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex: 0 0 auto;
+}
+
+.tt-module-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: #1e4c5c;
+  color: #ffffff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tt-module-title {
+  color: #1a2b3c;
+  font-family: 'Merriweather', 'Georgia', serif;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.tt-module-caption {
+  margin-top: 2px;
+  color: #8a9aa8;
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* ─── Logo + Title ──────────────────────────────────────── */
@@ -85,18 +120,18 @@
 
 /* ─── Digital Clock Card ────────────────────────────────── */
 .tt-sidebar-clock-card {
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 12px;
-  padding: 0.9rem 1rem;
-  margin-bottom: 1.5rem;
+  background: #f1f5f9;
+  border-radius: 9px;
+  padding: 0.45rem 0.75rem;
+  margin: 0;
   text-align: center;
 }
 
 .tt-sidebar-clock-time {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 1.65rem;
+  font-size: 1rem;
   font-weight: 700;
-  color: #ffffff;
+  color: #1e4c5c;
   letter-spacing: 0.04em;
   line-height: 1.1;
 }
@@ -105,7 +140,7 @@
   font-family: 'Inter', sans-serif;
   font-size: 0.68rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.6);
+  color: #6b7b93;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   margin-top: 0.3rem;
@@ -114,7 +149,7 @@
 /* ─── Navigation ────────────────────────────────────────── */
 .tt-sidebar-nav {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 0.3rem;
   flex: 1;
 }
@@ -128,7 +163,7 @@
   font-family: 'Inter', sans-serif;
   font-size: 13px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.75);
+  color: #6b7b93;
   background: transparent;
   border: none;
   cursor: pointer;
@@ -139,19 +174,19 @@
 }
 
 .tt-nav-item:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.08);
+  color: #1e4c5c;
+  background: #f1f5f9;
 }
 
 .tt-nav-item.active {
-  color: #1e4c5c;
-  background: #ffffff;
+  color: #ffffff;
+  background: #1e4c5c;
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .tt-nav-item.active:hover {
-  background: #ffffff;
+  background: #1e4c5c;
 }
 
 .tt-nav-icon {
@@ -162,10 +197,11 @@
 
 /* ─── Clock Status Card (Sidebar Bottom) ────────────────── */
 .tt-sidebar-status-card {
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 12px;
-  padding: 0.9rem 1rem;
-  margin-top: auto;
+  background: #f1f5f9;
+  border-radius: 9px;
+  padding: 0.45rem 0.75rem;
+  margin: 0;
+  flex: 0 0 auto;
 }
 
 .tt-sidebar-status-label {
@@ -182,7 +218,7 @@
   font-family: 'Inter', sans-serif;
   font-size: 11px;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.5);
+  color: #6b7b93;
   margin-top: 0.2rem;
 }
 
@@ -195,11 +231,11 @@
    MAIN CONTENT
    ═══════════════════════════════════════════════════════════ */
 .tt-main {
-  flex: 1;
-  margin-left: 260px;
-  padding: 1.75rem 2rem;
-  min-height: calc(100vh - 70px);
-  max-width: calc(100vw - 260px);
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1rem, 4vw, 3rem);
+  min-height: calc(100vh - 146px);
 }
 
 /* ─── Page Header ───────────────────────────────────────── */
@@ -217,7 +253,7 @@
   min-width: 0;
 }
 
-/* ─── Time In / Time Out Button ─────────────────────────── */
+/* ─── Clock In / Clock Out Button ───────────────────────── */
 .tt-clock-btn {
   display: inline-flex;
   align-items: center;
@@ -252,6 +288,76 @@
 
 .tt-clock-btn-icon {
   font-size: 14px;
+}
+
+.tt-loading-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  min-height: 84px;
+  padding: 1rem;
+  color: #1e4c5c;
+  background: rgba(248, 250, 252, 0.92);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tt-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #c9dbe0;
+  border-top-color: #1e4c5c;
+  border-radius: 50%;
+  animation: tt-spin 0.75s linear infinite;
+}
+
+@keyframes tt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tt-toast {
+  position: fixed;
+  top: 1rem;
+  right: 1.25rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  max-width: min(360px, calc(100vw - 2rem));
+  padding: 0.8rem 0.9rem 0.8rem 1rem;
+  border-left: 4px solid #e8602a;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1a2b3c;
+  box-shadow: 0 8px 24px rgba(26, 43, 60, 0.18);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tt-toast-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7b93;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tt-toast-dismiss:hover {
+  background: #f1f5f9;
+  color: #1a2b3c;
 }
 
 .tt-page-title {
@@ -451,6 +557,8 @@
 .tt-table-header-left {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
   gap: 0.5rem;
 }
 
@@ -460,6 +568,10 @@
   font-weight: 700;
   color: #1a2b3c;
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tt-nav-arrow {
@@ -552,7 +664,7 @@
   color: #1a2b3c;
 }
 
-/* Clocked In/Out Sub-rows */
+/* Clocked In / Clocked Out Sub-rows */
 .tt-clock-cell {
   display: flex;
   flex-direction: column;
@@ -630,18 +742,12 @@
    ═══════════════════════════════════════════════════════════ */
 @media (max-width: 992px) {
   .tt-sidebar {
-    width: 220px;
-    min-width: 220px;
-    padding: 1rem 0.75rem;
-    top: 70px;
-    height: calc(100vh - 70px);
+    padding-left: 1rem;
+    padding-right: 1rem;
   }
 
   .tt-main {
-    margin-left: 220px;
     padding: 1.25rem 1rem;
-    max-width: calc(100vw - 220px);
-    min-height: calc(100vh - 70px);
   }
 
   .tt-filter-input {
@@ -660,46 +766,67 @@
 
   .tt-sidebar {
     width: 100%;
-    min-width: unset;
-    position: relative;
-    top: auto;
-    height: auto;
-    flex-direction: row;
     flex-wrap: wrap;
     padding: 0.75rem;
     gap: 0.5rem;
   }
 
-  .tt-sidebar-brand {
-    margin-bottom: 0;
+  .tt-module-identity {
     width: 100%;
   }
 
   .tt-sidebar-clock-card {
-    display: none;
+    display: block;
+    margin-left: auto;
   }
 
   .tt-sidebar-nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 0.2rem;
-    flex: unset;
+    order: 3;
     width: 100%;
-  }
-
-  .tt-nav-item {
-    font-size: 12px;
-    padding: 0.4rem 0.6rem;
+    flex-wrap: wrap;
   }
 
   .tt-sidebar-status-card {
+    display: block;
+    order: 2;
+  }
+
+  .tt-nav-item {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .tt-sidebar-status-meta {
     display: none;
   }
 
+  .tt-sidebar-status-label {
+    font-size: 10px;
+  }
+
+  .tt-sidebar-clock-date {
+    display: none;
+  }
+
+  .tt-sidebar-clock-time {
+    font-size: 0.9rem;
+  }
+
   .tt-main {
+    width: 100%;
+    max-width: 100%;
     margin-left: 0;
     max-width: 100%;
     padding: 1rem 0.75rem;
+  }
+
+  .tt-page-header {
+    align-items: flex-start;
+  }
+
+  .tt-clock-btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .tt-filter-row {
@@ -727,5 +854,559 @@
   .tt-table-grid th,
   .tt-table-grid td {
     padding: 0.5rem 0.6rem;
+  }
+
+  .tt-table-header {
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+  }
+
+  .tt-table-header-left {
+    flex-basis: 100%;
+  }
+
+  .tt-table-title {
+    flex: 1 1 auto;
+  }
+}
+
+/* Keep the compact header readable on very narrow screens. */
+@media (max-width: 420px) {
+  .tt-module-identity {
+    justify-content: space-between;
+  }
+
+  .tt-sidebar-clock-card {
+    margin-left: 0;
+  }
+
+  .tt-sidebar-status-card {
+    margin-left: auto;
+  }
+
+  .tt-table-grid {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .tt-table-grid th,
+  .tt-table-grid td {
+    min-width: 105px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   REFERENCE UI — Spruce workday activity surface
+   ═══════════════════════════════════════════════════════════ */
+:root {
+  --tt-spruce-50: #f0f6f6;
+  --tt-spruce-100: #dcebec;
+  --tt-spruce-200: #bcd7d9;
+  --tt-spruce-600: #2c646b;
+  --tt-spruce-700: #235056;
+  --tt-spruce-800: #1c444d;
+  --tt-spruce-900: #16383e;
+  --tt-forest-600: #1e6052;
+  --tt-app-bg: #f3f7f7;
+}
+
+.tt-app-layout {
+  display: flex;
+  align-items: flex-start;
+  min-height: calc(100vh - 60px);
+  background: var(--tt-app-bg);
+  color: #1a2e33;
+}
+
+.tt-sidebar {
+  width: 260px;
+  min-width: 260px;
+  height: calc(100vh - 60px);
+  min-height: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1rem;
+  padding: 1.5rem 1rem;
+  overflow-y: auto;
+  border-right: 1px solid #e1ebec;
+  border-bottom: 0;
+  box-shadow: 1px 0 3px rgba(22, 56, 62, 0.05);
+}
+
+.tt-module-identity {
+  gap: 0.7rem;
+}
+
+.tt-module-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--tt-spruce-800);
+  border: 1px solid rgba(35, 80, 86, 0.4);
+  box-shadow: 0 1px 3px rgba(22, 56, 62, 0.12);
+}
+
+.tt-module-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 16px;
+  color: var(--tt-spruce-900);
+}
+
+.tt-module-caption {
+  color: var(--tt-spruce-600);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+}
+
+.tt-sidebar-clock-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--tt-spruce-100);
+  border-radius: 11px;
+  background: rgba(240, 246, 246, 0.8);
+}
+
+.tt-sidebar-clock-card::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+}
+
+.tt-sidebar-clock-time {
+  font-size: 1rem;
+  color: var(--tt-spruce-900);
+}
+
+.tt-sidebar-clock-date {
+  margin-top: 0.15rem;
+  color: var(--tt-spruce-600);
+  font-size: 11px;
+}
+
+.tt-sidebar-nav {
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  width: 100%;
+  padding: 0.35rem;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 11px;
+  background: rgba(241, 245, 249, 0.8);
+}
+
+.tt-nav-item {
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tt-nav-item.active {
+  background: var(--tt-spruce-800);
+  box-shadow: 0 1px 3px rgba(22, 56, 62, 0.18);
+}
+
+.tt-nav-item.active:hover {
+  background: var(--tt-spruce-800);
+}
+
+.tt-sidebar-status-card {
+  padding: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.tt-sidebar-status-meta {
+  margin-top: 0.15rem;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.tt-status-badge {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.9);
+}
+
+.tt-clock-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 0.7rem 1.25rem;
+  border-radius: 11px;
+  background: var(--tt-forest-600);
+  box-shadow: 0 4px 10px rgba(30, 96, 82, 0.18);
+  font-size: 13px;
+}
+
+.tt-clock-btn.clocked-in {
+  background: #b45309;
+}
+
+.tt-main {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  min-height: calc(100vh - 140px);
+  padding: 0;
+}
+
+.tt-main > .tt-page-header {
+  display: none;
+}
+
+.tt-table-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #ffffff;
+}
+
+.tt-table-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem clamp(1rem, 4vw, 3rem);
+  border-bottom: 1px solid #e9f0f1;
+  background: #ffffff;
+}
+
+.tt-table-header-left {
+  gap: 0.6rem;
+}
+
+.tt-table-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--tt-spruce-900);
+  font-size: clamp(0.95rem, 2vw, 1.1rem);
+  letter-spacing: -0.01em;
+}
+
+.tt-table-title span {
+  font-weight: 600;
+}
+
+.tt-table-title strong {
+  color: var(--tt-spruce-800);
+  text-decoration: underline;
+  text-decoration-color: #91bcc0;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.tt-nav-arrow {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #64748b;
+  border-color: #dce3ed;
+}
+
+.tt-pill-week {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--tt-spruce-200);
+  border-radius: 8px;
+  background: var(--tt-spruce-50);
+  color: var(--tt-spruce-800);
+}
+
+.tt-logs-toolbar {
+  margin: 0;
+}
+
+.tt-btn-export {
+  padding: 0.5rem 0.9rem;
+  border: 2px solid var(--tt-spruce-800);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--tt-spruce-800);
+  font-size: 12px;
+}
+
+.tt-btn-export:hover {
+  background: var(--tt-spruce-800);
+}
+
+.tt-table-grid th {
+  padding: 0.85rem clamp(1rem, 4vw, 3rem);
+  border-bottom: 1px solid #e6eeef;
+  background: #fbfdfd;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.tt-table-grid th:nth-child(4) {
+  text-align: center;
+}
+
+.tt-table-grid th:last-child {
+  text-align: right;
+}
+
+.tt-table-grid td {
+  padding: 1rem clamp(1rem, 4vw, 3rem);
+  border-bottom: 1px solid #edf3f4;
+}
+
+.tt-table-grid tr:hover td {
+  background: #f8fbfb;
+}
+
+.tt-table-grid tr:has(.tt-day-cell-wrap.is-today) td {
+  background: rgba(240, 246, 246, 0.7);
+}
+
+.tt-table-grid tr:has(.tt-day-cell-wrap.is-today) td:first-child {
+  border-left: 4px solid var(--tt-spruce-700);
+}
+
+.tt-day-cell-wrap {
+  min-width: 11rem;
+}
+
+.tt-day-cell-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-day-marker {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.tt-day-cell-wrap.is-today .tt-day-marker {
+  width: 8px;
+  height: 8px;
+  background: var(--tt-spruce-700);
+}
+
+.tt-day-date {
+  display: block;
+  margin: 0.25rem 0 0 1rem;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.tt-today-badge {
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: var(--tt-spruce-200);
+  color: var(--tt-spruce-900);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tt-clock-label {
+  color: #94a3b8;
+}
+
+.tt-clock-value {
+  color: var(--tt-spruce-900);
+  font-size: 12px;
+}
+
+.tt-hours-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.4rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: var(--tt-spruce-900);
+}
+
+.tt-action-cell {
+  text-align: right;
+}
+
+.tt-btn-edit {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #64748b;
+}
+
+.tt-table-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem clamp(1rem, 4vw, 3rem);
+  border-top: 1px solid #e2ecec;
+  background: #fbfdfd;
+}
+
+.tt-summary-metrics,
+.tt-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.tt-summary-metrics > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tt-summary-metrics strong {
+  color: var(--tt-spruce-900);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.tt-summary-positive {
+  color: #047857 !important;
+}
+
+.tt-btn-draft,
+.tt-btn-submit {
+  padding: 0.6rem 0.9rem;
+  border: 0;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tt-btn-draft {
+  background: transparent;
+  color: #64748b;
+}
+
+.tt-btn-submit {
+  background: var(--tt-spruce-800);
+  color: #ffffff;
+}
+
+.tt-btn-draft:disabled,
+.tt-btn-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+@media (max-width: 1100px) {
+  .tt-main {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .tt-sidebar {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 0.85rem;
+    border-right: 0;
+    border-bottom: 1px solid #e1ebec;
+    box-shadow: 0 1px 3px rgba(22, 56, 62, 0.05);
+  }
+
+  .tt-module-identity {
+    width: 100%;
+    order: 1;
+  }
+
+  .tt-sidebar-clock-card {
+    display: none;
+  }
+
+  .tt-sidebar-status-card {
+    margin-left: auto;
+    order: 3;
+  }
+
+  .tt-sidebar-nav {
+    order: 4;
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    flex: 0 0 100%;
+  }
+
+  .tt-nav-item {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .tt-clock-btn {
+    order: 2;
+    width: 100%;
+  }
+
+  .tt-table-header {
+    grid-template-columns: 1fr auto;
+  }
+
+  .tt-table-header-left {
+    grid-column: 1 / -1;
+  }
+
+  .tt-table-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tt-summary-metrics,
+  .tt-summary-actions {
+    flex-wrap: wrap;
+    gap: 0.75rem 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .tt-module-identity {
+    width: auto;
+  }
+
+  .tt-sidebar-clock-card {
+    display: none;
+  }
+
+  .tt-sidebar-status-card {
+    margin-left: auto;
+  }
+
+  .tt-clock-btn {
+    padding: 0.6rem 0.8rem;
+  }
+
+  .tt-table-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .tt-summary-actions {
+    width: 100%;
+  }
+
+  .tt-btn-draft,
+  .tt-btn-submit {
+    flex: 1 1 auto;
   }
 }

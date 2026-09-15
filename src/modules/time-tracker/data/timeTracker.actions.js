@@ -1,6 +1,6 @@
 /**
  * Server Actions — timeTracker.actions.js
- * Server-side data loading + clock in/out for the Time Tracker module.
+ * Server-side data loading + clock in/clock out for the Time Tracker module.
  */
 "use server";
 
@@ -35,6 +35,50 @@ function describeError(err) {
 async function getSessionUserId() {
   const session = await getCurrentSession();
   return session?.userId || null;
+}
+
+const TIME_TRACKER_APP_ID = 10;
+
+async function loadTimeTrackerRoles(supabase, userId) {
+  const { data: accessRows, error: accessError } = await supabase
+    .from("psb_m_userapproleaccess")
+    .select("role_id")
+    .eq("user_id", userId)
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("is_active", true);
+
+  const roleIds = accessError || !Array.isArray(accessRows)
+    ? []
+    : [...new Set(accessRows.map((row) => row.role_id).filter(Boolean))];
+  const [{ data: roles }, { data: orgAccessRows }] = await Promise.all([
+    roleIds.length
+      ? supabase
+        .from("psb_s_role")
+        .select("role_id, role_name, app_id, is_active")
+        .in("role_id", roleIds)
+        .eq("app_id", TIME_TRACKER_APP_ID)
+        .eq("is_active", true)
+      : { data: [] },
+    supabase
+      .from("wfk_m_userorgrole")
+      .select("role_id")
+      .eq("user_id", userId)
+      .eq("is_active", true),
+  ]);
+
+  const orgRoleIds = [...new Set((orgAccessRows || []).map((row) => row.role_id).filter(Boolean))];
+  const { data: orgRoles } = orgRoleIds.length
+    ? await supabase
+      .from("wfk_s_orgrole")
+      .select("orgrole_id, name, description")
+      .in("orgrole_id", orgRoleIds)
+      .eq("is_active", true)
+    : { data: [] };
+
+  return {
+    roles: Array.isArray(roles) ? roles : [],
+    orgRoles: Array.isArray(orgRoles) ? orgRoles : [],
+  };
 }
 
 /** Look up the numeric id for a status code (e.g. "CLOCKED_IN"). */
@@ -111,6 +155,8 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
   if (!userId) {
     return {
       logs: [],
+      roles: [],
+      orgRoles: [],
       clockedIn: false,
       openLogId: null,
       lastClockIn: null,
@@ -119,6 +165,7 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
   }
 
   const supabase = getSupabaseAdmin();
+  const { roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId);
 
   const { data: logs, error: logsError } = await supabase
     .from("time_t_logs")
@@ -144,6 +191,8 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
 
   return {
     logs: logs || [],
+    roles,
+    orgRoles,
     clockedIn: Boolean(openLog),
     openLogId: openLog?.log_id ?? null,
     lastClockIn: openLog ? `${openLog.clock_in_date}T${openLog.clock_in_time}` : null,
@@ -244,7 +293,7 @@ export async function clockOut(logId, timezone) {
 }
 
 // `updateAttendanceRecord`, `deleteAttendanceRecord`, `saveSchedule`,
-// `updateConfig` are unrelated to clock in/out and still stubbed — not
+// `updateConfig` are unrelated to clock in/clock out and still stubbed — not
 // touched here.
 export async function updateAttendanceRecord(id, data) {
   return { success: true, id, ...data };
