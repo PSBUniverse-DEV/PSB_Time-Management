@@ -81,6 +81,42 @@ async function loadTimeTrackerRoles(supabase, userId) {
   };
 }
 
+const DEFAULT_WEEKLY_HOURS_TARGET = 40;
+
+/**
+ * Look up a user's weekly hours target. `hasHoursTarget` is false when no
+ * active row exists — used to gate Clock In until an admin sets one up.
+ */
+async function loadHoursTargetInfo(supabase, userId) {
+  const { data, error } = await supabase
+    .from("time_m_userhourstarget")
+    .select("weekly_hours_target")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error || !data) {
+    return { weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET, hasHoursTarget: false };
+  }
+  return {
+    weeklyHoursTarget: Number(data.weekly_hours_target) || DEFAULT_WEEKLY_HOURS_TARGET,
+    hasHoursTarget: true,
+  };
+}
+
+/**
+ * Refetch just the current user's Time Tracker roles/org-roles — used to
+ * keep sidebar tab visibility in sync after an Admin changes role access
+ * elsewhere, without re-fetching the whole week's logs.
+ */
+export async function loadCurrentUserPermissionsData() {
+  const userId = await getSessionUserId();
+  if (!userId) return { roles: [], orgRoles: [] };
+
+  const supabase = getSupabaseAdmin();
+  return loadTimeTrackerRoles(supabase, userId);
+}
+
 /** Look up the numeric id for a status code (e.g. "CLOCKED_IN"). */
 async function getStatusId(supabase, statusCode) {
   const { data, error } = await supabase
@@ -157,6 +193,8 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
       logs: [],
       roles: [],
       orgRoles: [],
+      weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
+      hasHoursTarget: false,
       clockedIn: false,
       openLogId: null,
       lastClockIn: null,
@@ -166,6 +204,7 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
 
   const supabase = getSupabaseAdmin();
   const { roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId);
+  const { weeklyHoursTarget, hasHoursTarget } = await loadHoursTargetInfo(supabase, userId);
 
   const { data: logs, error: logsError } = await supabase
     .from("time_t_logs")
@@ -193,11 +232,26 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
     logs: logs || [],
     roles,
     orgRoles,
+    weeklyHoursTarget,
+    hasHoursTarget,
     clockedIn: Boolean(openLog),
     openLogId: openLog?.log_id ?? null,
     lastClockIn: openLog ? `${openLog.clock_in_date}T${openLog.clock_in_time}` : null,
     config: { lateDeadline: DEFAULT_LATE_DEADLINE, gracePeriod: DEFAULT_GRACE_PERIOD },
   };
+}
+
+/**
+ * Refetch just the current user's hours-target info — used to keep the
+ * Logs tab's Summary panel in sync after an Admin edits it in Setup,
+ * without re-fetching the whole week's logs.
+ */
+export async function loadCurrentUserHoursTarget() {
+  const userId = await getSessionUserId();
+  if (!userId) return { weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET, hasHoursTarget: false };
+
+  const supabase = getSupabaseAdmin();
+  return loadHoursTargetInfo(supabase, userId);
 }
 
 // ── Writes ───────────────────────────────────────────────────
@@ -208,6 +262,15 @@ export async function clockIn(timezone) {
   if (!userId) return { success: false, error: "Not authenticated." };
 
   const supabase = getSupabaseAdmin();
+
+  const { hasHoursTarget } = await loadHoursTargetInfo(supabase, userId);
+  if (!hasHoursTarget) {
+    return {
+      success: false,
+      error: "Your weekly hours target hasn't been set up yet. Contact your admin.",
+    };
+  }
+
   const now = new Date();
   const today = dateStrInTz(now, timezone);
 
@@ -292,12 +355,306 @@ export async function clockOut(logId, timezone) {
   return { success: true, record: data };
 }
 
-// `updateAttendanceRecord`, `deleteAttendanceRecord`, `saveSchedule`,
-// `updateConfig` are unrelated to clock in/clock out and still stubbed — not
-// touched here.
-export async function updateAttendanceRecord(id, data) {
-  return { success: true, id, ...data };
+/** Load the "Reason for Edit" dropdown options: time_s_status rows tagged 'edit_reason'. */
+export async function loadEditReasons() {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("time_s_status")
+    .select("status_id, status_name")
+    .eq("tag", "edit_reason")
+    .eq("is_active", true)
+    .order("display_order", { ascending: true });
+
+  if (error) {
+    console.error("loadEditReasons error:", describeError(error));
+    return [];
+  }
+  return data || [];
 }
+
+// ── Admin Setup: Employee Hours Targets ─────────────────────
+
+/** List every active platform user with their weekly hours target (defaulted to 40 if unset). */
+export async function loadEmployeeHoursTargets() {
+  const supabase = getSupabaseAdmin();
+
+  const [{ data: users }, { data: targets }] = await Promise.all([
+    supabase
+      .from("psb_s_user")
+      .select("user_id, first_name, last_name, username")
+      .eq("is_active", true),
+    supabase
+      .from("time_m_userhourstarget")
+      .select("user_id, weekly_hours_target")
+      .eq("is_active", true),
+  ]);
+
+  const targetByUser = new Map((targets || []).map((t) => [t.user_id, t]));
+
+  return (users || [])
+    .map((u) => {
+      const target = targetByUser.get(u.user_id);
+      const name = `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username;
+      return {
+        user_id: u.user_id,
+        name,
+        weekly_hours_target: target ? Number(target.weekly_hours_target) : DEFAULT_WEEKLY_HOURS_TARGET,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Create or update a user's weekly hours target (upsert-by-check, preserving created_by on updates). */
+export async function setUserWeeklyHoursTarget(targetUserId, hours) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const numericHours = Number(hours);
+  if (!Number.isFinite(numericHours) || numericHours <= 0) {
+    return { success: false, error: "Enter a valid weekly hours target." };
+  }
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: existing } = await supabase
+    .from("time_m_userhourstarget")
+    .select("target_id")
+    .eq("user_id", targetUserId)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await supabase
+      .from("time_m_userhourstarget")
+      .update({
+        weekly_hours_target: numericHours,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+        updated_by: userId,
+      })
+      .eq("target_id", existing.target_id);
+
+    if (error) {
+      console.error("setUserWeeklyHoursTarget update error:", describeError(error));
+      return { success: false, error: "Failed to update hours target." };
+    }
+    return { success: true };
+  }
+
+  const { error } = await supabase.from("time_m_userhourstarget").insert({
+    user_id: targetUserId,
+    weekly_hours_target: numericHours,
+    created_by: userId,
+  });
+
+  if (error) {
+    console.error("setUserWeeklyHoursTarget insert error:", describeError(error));
+    return { success: false, error: "Failed to set hours target." };
+  }
+  return { success: true };
+}
+
+// ── Admin Setup: Edit Reasons ────────────────────────────────
+
+/** All edit_reason-tagged rows (active AND inactive) for admin management. */
+export async function loadEditReasonsAdmin() {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("time_s_status")
+    .select("status_id, status_code, status_name, display_order, is_active")
+    .eq("tag", "edit_reason")
+    .order("display_order", { ascending: true });
+
+  if (error) {
+    console.error("loadEditReasonsAdmin error:", describeError(error));
+    return [];
+  }
+  return data || [];
+}
+
+/** Create (statusId null) or update an edit_reason row. */
+export async function saveEditReason({ statusId, statusCode, statusName, displayOrder }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const code = String(statusCode || "").trim().toUpperCase().replace(/\s+/g, "_");
+  const name = String(statusName || "").trim();
+  const order = Number(displayOrder) || 0;
+
+  if (!code || !name) {
+    return { success: false, error: "Code and Name are required." };
+  }
+
+  const supabase = getSupabaseAdmin();
+
+  if (statusId) {
+    const { data, error } = await supabase
+      .from("time_s_status")
+      .update({ status_code: code, status_name: name, display_order: order })
+      .eq("status_id", statusId)
+      .eq("tag", "edit_reason")
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("saveEditReason update error:", describeError(error));
+      return { success: false, error: "Failed to save reason." };
+    }
+    return { success: true, record: data };
+  }
+
+  const { data, error } = await supabase
+    .from("time_s_status")
+    .insert({ status_code: code, status_name: name, display_order: order, tag: "edit_reason" })
+    .select("*")
+    .single();
+
+  if (error) {
+    console.error("saveEditReason insert error:", describeError(error));
+    return { success: false, error: "Failed to create reason." };
+  }
+  return { success: true, record: data };
+}
+
+/** Activate or deactivate an edit_reason row — never touches session_status-tagged rows. */
+export async function setEditReasonActive(statusId, isActive) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("time_s_status")
+    .update({ is_active: Boolean(isActive) })
+    .eq("status_id", statusId)
+    .eq("tag", "edit_reason")
+    .select("*")
+    .single();
+
+  if (error) {
+    console.error("setEditReasonActive error:", describeError(error));
+    return { success: false, error: "Failed to update reason status." };
+  }
+  return { success: true, record: data };
+}
+
+/**
+ * Create or update a time_t_logs entry from the Edit Time Entry modal.
+ * Clock-in and clock-out dates are independent so night shifts that cross
+ * midnight can be recorded correctly (e.g. clock in Sep 17 08:35 PM →
+ * clock out Sep 18 02:19 AM).
+ *
+ * @param {Object} params
+ * @param {number|null} params.logId - existing log to update, or null to create a new entry.
+ * @param {string} params.clockInDate - "YYYY-MM-DD" the entry's clock-in belongs to.
+ * @param {string} [params.clockOutDate] - "YYYY-MM-DD" of the clock-out, required when clockOutTime is set.
+ * @param {string} params.clockInTime - "HH:MM" (24-hour, from <input type="time">).
+ * @param {string} params.clockOutTime - "HH:MM" (24-hour) or "" if not clocked out.
+ * @param {number} params.reasonId - required time_s_status.status_id tagged 'edit_reason'.
+ * @param {string} [params.notes] - optional free-text note.
+ */
+export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clockInTime, clockOutTime, reasonId, notes }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+  if (!reasonId) return { success: false, error: "A reason for edit is required." };
+  if (!clockInDate) return { success: false, error: "Clock In date is required." };
+  if (!clockInTime) return { success: false, error: "Clock In time is required." };
+
+  const supabase = getSupabaseAdmin();
+
+  // The FK on edit_reason_id can't enforce the tag split by itself (it's a
+  // shared lookup table with session-status rows too), so re-validate the
+  // submitted reason actually belongs to the edit_reason list server-side
+  // before trusting it, rather than relying on the client having sent a
+  // value that only came from the correctly-filtered dropdown.
+  const { data: reasonRow, error: reasonError } = await supabase
+    .from("time_s_status")
+    .select("status_id")
+    .eq("status_id", reasonId)
+    .eq("tag", "edit_reason")
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (reasonError || !reasonRow) {
+    return { success: false, error: "Invalid reason for edit." };
+  }
+
+  const hasClockOut = Boolean(clockOutTime);
+  if (hasClockOut && !clockOutDate) {
+    return { success: false, error: "Clock Out date is required." };
+  }
+
+  // App-level guard (replaces the dropped DB constraint): block a second
+  // session landing on the same clock_in_date for this user. Excludes the
+  // row being edited itself, so saving an existing entry without changing
+  // its date doesn't falsely collide with itself.
+  let conflictQuery = supabase
+    .from("time_t_logs")
+    .select("log_id")
+    .eq("user_id", userId)
+    .eq("clock_in_date", clockInDate);
+
+  if (logId) {
+    conflictQuery = conflictQuery.neq("log_id", logId);
+  }
+
+  const { data: conflictRow } = await conflictQuery.maybeSingle();
+
+  if (conflictRow) {
+    return { success: false, error: "Another session already exists for that Clock In date." };
+  }
+
+  const statusId = await getStatusId(supabase, hasClockOut ? STATUS_CLOCKED_OUT : STATUS_CLOCKED_IN);
+  const totalHours = hasClockOut
+    ? diffHours(clockInDate, `${clockInTime}:00`, clockOutDate, `${clockOutTime}:00`)
+    : null;
+
+  if (hasClockOut && totalHours < 0) {
+    return { success: false, error: "Clock Out must be after Clock In." };
+  }
+
+  const payload = {
+    status_id: statusId,
+    clock_in_date: clockInDate,
+    clock_in_time: `${clockInTime}:00`,
+    clock_out_date: hasClockOut ? clockOutDate : null,
+    clock_out_time: hasClockOut ? `${clockOutTime}:00` : null,
+    total_hours: totalHours,
+    edit_reason_id: reasonId,
+    notes: notes || null,
+    updated_at: new Date().toISOString(),
+    updated_by: userId,
+  };
+
+  if (logId) {
+    const { data, error } = await supabase
+      .from("time_t_logs")
+      .update(payload)
+      .eq("log_id", logId)
+      .eq("user_id", userId)
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("saveTimeLogEntry update error:", describeError(error));
+      return { success: false, error: "Failed to save changes." };
+    }
+    return { success: true, record: data };
+  }
+
+  const { data, error } = await supabase
+    .from("time_t_logs")
+    .insert({ ...payload, user_id: userId, created_by: userId })
+    .select("*")
+    .single();
+
+  if (error) {
+    console.error("saveTimeLogEntry insert error:", describeError(error));
+    return { success: false, error: "Failed to create entry." };
+  }
+  return { success: true, record: data };
+}
+
+// `deleteAttendanceRecord`, `saveSchedule`, `updateConfig` are unrelated to
+// clock in/clock out or time-entry editing and still stubbed — not touched here.
 export async function deleteAttendanceRecord(id) {
   return { success: true, id };
 }

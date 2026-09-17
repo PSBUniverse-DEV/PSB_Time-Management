@@ -11,12 +11,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { StatusBadge, toastError, toastWarning } from "@/shared/components/ui";
 import {
+  Button,
+  InlineEditCell,
+  Input,
+  Modal,
+  StatusBadge,
+  TableZ,
+  toastError,
+  toastSuccess,
+  toastWarning,
+} from "@/shared/components/ui";
+import {
+  faBolt,
   faChevronLeft,
   faChevronRight,
   faDownload,
-  faPen,
+  faGear,
+  faPlus,
   faTable,
   faClock,
   faFileInvoiceDollar,
@@ -30,7 +42,16 @@ import "../timeTracker.css";
 import {
   clockIn as clockInAction,
   clockOut as clockOutAction,
+  loadCurrentUserHoursTarget,
+  loadCurrentUserPermissionsData,
+  loadEditReasons,
+  loadEditReasonsAdmin,
+  loadEmployeeHoursTargets,
   loadTimeTrackerData,
+  saveEditReason,
+  saveTimeLogEntry as saveTimeLogEntryAction,
+  setEditReasonActive,
+  setUserWeeklyHoursTarget,
 } from "../data/timeTracker.actions";
 import { getTimeTrackerPermissions } from "../data/timeTracker.permissions";
 
@@ -40,12 +61,20 @@ import { getTimeTrackerPermissions } from "../data/timeTracker.permissions";
 
 function buildNavItems(permissions) {
   const items = [];
-  if (permissions.canViewLogsTab) items.push({ key: "logs", label: "Logs", icon: faTable });
+  if (permissions.canViewLogsTab)
+    items.push({ key: "logs", label: "Logs", icon: faTable });
   if (permissions.canViewTimesheetsTab) {
-    items.push({ key: "timesheets", label: "Timesheets", icon: faFileInvoiceDollar });
+    items.push({
+      key: "timesheets",
+      label: "Timesheets",
+      icon: faFileInvoiceDollar,
+    });
   }
   if (permissions.canViewApprovalsTab) {
     items.push({ key: "approvals", label: "Approvals", icon: faStamp });
+  }
+  if (permissions.canViewSetupTab) {
+    items.push({ key: "setup", label: "Setup", icon: faGear });
   }
   return items;
 }
@@ -112,11 +141,28 @@ function formatTimeDisplay(timeStr) {
   return `${hour12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+/**
+ * Convert a "h:mm AM/PM" display string (as stored in the logs) into the
+ * 24-hour "HH:MM" value expected by <input type="time">. Returns "" for
+ * anything that doesn't look like a 12-hour time.
+ */
+function toTimeInputValue(timeStr) {
+  const match = String(timeStr || "").match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return "";
+  let hour = Number(match[1]) % 12;
+  if (match[3].toUpperCase() === "PM") hour += 12;
+  return `${String(hour).padStart(2, "0")}:${match[2]}`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // HOOK: useLogsPage
 // ═══════════════════════════════════════════════════════════════
 
 function useLogsPage(initialData, permissions) {
+  const [weeklyHoursTarget, setWeeklyHoursTarget] = useState(
+    Number(initialData?.weeklyHoursTarget) || 40,
+  );
+  const [hasHoursTarget, setHasHoursTarget] = useState(Boolean(initialData?.hasHoursTarget));
   const navItems = useMemo(() => buildNavItems(permissions), [permissions]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeNav, setActiveNav] = useState(navItems[0]?.key || "logs");
@@ -127,7 +173,7 @@ function useLogsPage(initialData, permissions) {
   const [clockedIn, setClockedIn] = useState(Boolean(initialData?.clockedIn));
   const [openLogId, setOpenLogId] = useState(initialData?.openLogId ?? null);
   const [lastClockIn, setLastClockIn] = useState(
-    initialData?.lastClockIn ? new Date(initialData.lastClockIn) : null
+    initialData?.lastClockIn ? new Date(initialData.lastClockIn) : null,
   );
   const [toggling, setToggling] = useState(false);
   const [weekLoading, setWeekLoading] = useState(false);
@@ -139,6 +185,28 @@ function useLogsPage(initialData, permissions) {
     return () => clearInterval(interval);
   }, []);
 
+  // Keep the Summary panel's hours target in sync with Setup. Refetches
+  // whenever the Logs tab becomes active (that's the only place it's
+  // shown), skipping the first render since initialData is already fresh.
+  const isFirstNavRender = useRef(true);
+  useEffect(() => {
+    if (isFirstNavRender.current) {
+      isFirstNavRender.current = false;
+      return;
+    }
+    if (activeNav !== "logs") return;
+
+    let cancelled = false;
+    loadCurrentUserHoursTarget().then((data) => {
+      if (cancelled) return;
+      setWeeklyHoursTarget(Number(data.weeklyHoursTarget) || 40);
+      setHasHoursTarget(Boolean(data.hasHoursTarget));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNav]);
+
   // Compute week date range for the header
   const weekRange = useMemo(() => {
     const now = new Date();
@@ -149,7 +217,11 @@ function useLogsPage(initialData, permissions) {
     sunday.setDate(monday.getDate() + 6);
 
     const formatDate = (d) =>
-      d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      d.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
 
     return {
       start: monday,
@@ -174,7 +246,8 @@ function useLogsPage(initialData, permissions) {
         if (!cancelled) setWeekLogs(data.logs || []);
       })
       .catch(() => {
-        if (!cancelled) toastError("Unable to load this week's time logs.", "Time Logs");
+        if (!cancelled)
+          toastError("Unable to load this week's time logs.", "Time Logs");
       })
       .finally(() => {
         if (!cancelled) setWeekLoading(false);
@@ -196,14 +269,27 @@ function useLogsPage(initialData, permissions) {
       const log = logsByDate.get(rowDate);
       return {
         id: `day-${index}`,
+        isoDate: rowDate,
         dayName,
-        date: date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-        shortDate: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        date: date.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
+        shortDate: date.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        }),
         isToday: rowDate === today,
         clockedInDate: log ? formatDateDisplay(log.clock_in_date) : null,
         clockedInTime: log ? formatTimeDisplay(log.clock_in_time) : null,
-        clockedOutDate: log?.clock_out_date ? formatDateDisplay(log.clock_out_date) : null,
-        clockedOutTime: log?.clock_out_time ? formatTimeDisplay(log.clock_out_time) : null,
+        clockOutIsoDate: log?.clock_out_date ?? null,
+        clockedOutDate: log?.clock_out_date
+          ? formatDateDisplay(log.clock_out_date)
+          : null,
+        clockedOutTime: log?.clock_out_time
+          ? formatTimeDisplay(log.clock_out_time)
+          : null,
         hours: log?.total_hours ?? null,
         hasData: Boolean(log),
         logId: log?.log_id ?? null,
@@ -216,13 +302,33 @@ function useLogsPage(initialData, permissions) {
     [weekRows],
   );
 
-  const goPreviousWeek = useCallback(() => setWeekOffset((prev) => prev - 1), []);
+  const regularHours = useMemo(
+    () => Math.min(totalHours, weeklyHoursTarget),
+    [totalHours, weeklyHoursTarget],
+  );
+
+  const overtimeHours = useMemo(
+    () => Math.max(totalHours - weeklyHoursTarget, 0),
+    [totalHours, weeklyHoursTarget],
+  );
+
+  const goPreviousWeek = useCallback(
+    () => setWeekOffset((prev) => prev - 1),
+    [],
+  );
   const goNextWeek = useCallback(() => setWeekOffset((prev) => prev + 1), []);
   const goThisWeek = useCallback(() => setWeekOffset(0), []);
 
   // Clock in/clock out against the database via server actions.
   const handleClockToggle = useCallback(async () => {
     if (toggling) return;
+    if (!clockedIn && !hasHoursTarget) {
+      toastWarning(
+        "Your weekly hours target hasn't been set up yet. Contact your admin.",
+        "Clock In Unavailable",
+      );
+      return;
+    }
     setToggling(true);
     try {
       if (!clockedIn) {
@@ -230,8 +336,15 @@ function useLogsPage(initialData, permissions) {
         if (result.success) {
           setClockedIn(true);
           setOpenLogId(result.record.log_id);
-          setLastClockIn(new Date(`${result.record.clock_in_date}T${result.record.clock_in_time}`));
-          setWeekLogs((prev) => [...prev.filter((l) => l.log_id !== result.record.log_id), result.record]);
+          setLastClockIn(
+            new Date(
+              `${result.record.clock_in_date}T${result.record.clock_in_time}`,
+            ),
+          );
+          setWeekLogs((prev) => [
+            ...prev.filter((l) => l.log_id !== result.record.log_id),
+            result.record,
+          ]);
         } else {
           const message = result.error || "Failed to clock in.";
           if (message.toLowerCase().includes("already")) {
@@ -245,7 +358,11 @@ function useLogsPage(initialData, permissions) {
         if (result.success) {
           setClockedIn(false);
           setOpenLogId(null);
-          setWeekLogs((prev) => prev.map((l) => (l.log_id === result.record.log_id ? result.record : l)));
+          setWeekLogs((prev) =>
+            prev.map((l) =>
+              l.log_id === result.record.log_id ? result.record : l,
+            ),
+          );
         } else {
           const message = result.error || "Failed to clock out.";
           if (message.toLowerCase().includes("already")) {
@@ -261,7 +378,24 @@ function useLogsPage(initialData, permissions) {
     } finally {
       setToggling(false);
     }
-  }, [clockedIn, openLogId, toggling]);
+  }, [clockedIn, hasHoursTarget, openLogId, toggling]);
+
+  // Save an edit (or a brand-new manual entry) from EditEntryModal.
+  const handleSaveEdit = useCallback(async (formData) => {
+    const result = await saveTimeLogEntryAction(formData);
+    if (result.success) {
+      setWeekLogs((prev) => {
+        const exists = prev.some((l) => l.log_id === result.record.log_id);
+        return exists
+          ? prev.map((l) => (l.log_id === result.record.log_id ? result.record : l))
+          : [...prev, result.record];
+      });
+      toastSuccess("Time entry saved.", "Time Tracker");
+    } else {
+      toastError(result.error || "Failed to save time entry.", "Time Tracker");
+    }
+    return result;
+  }, []);
 
   return {
     currentTime,
@@ -276,18 +410,30 @@ function useLogsPage(initialData, permissions) {
     weekOffset,
     weekLoading,
     totalHours,
+    regularHours,
+    overtimeHours,
+    weeklyHoursTarget,
+    hasHoursTarget,
     clockedIn,
     lastClockIn,
     handleClockToggle,
+    handleSaveEdit,
     toggling,
   };
 }
 
+/**
+ * Non-blocking modal-style loading overlay shown while a clock in / clock out
+ * server action is in flight. Uses `pointer-events: none` so the user can keep
+ * clicking and working on the page behind the panel while it processes.
+ */
 function LoadingPanel({ message }) {
   return (
     <div className="tt-loading-panel" role="status" aria-live="polite">
-      <span className="tt-loading-spinner" aria-hidden="true" />
-      <span>{message}</span>
+      <div className="tt-loading-dialog">
+        <span className="tt-loading-spinner" aria-hidden="true" />
+        <span className="tt-loading-message">{message}</span>
+      </div>
     </div>
   );
 }
@@ -298,7 +444,17 @@ function LoadingPanel({ message }) {
 
 // ─── Sidebar ──────────────────────────────────────────────────
 
-function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn, navItems, onToggle, disabled }) {
+function Sidebar({
+  currentTime,
+  activeNav,
+  onNavChange,
+  clockedIn,
+  lastClockIn,
+  navItems,
+  onToggle,
+  disabled,
+  hasHoursTarget,
+}) {
   const timeStr = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -320,21 +476,36 @@ function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn, 
           TT
         </span>
         <div>
-          <div className="tt-module-title">Time Tracker</div>
+          <div className="tt-module-title-row">
+            <div className="tt-module-title">Time Tracker</div>
+          </div>
           <div className="tt-module-caption">Workday activity</div>
         </div>
       </div>
 
-      {/* Digital Clock */}
-      <div className="tt-sidebar-clock-card">
-        <div className="tt-sidebar-clock-time">{timeStr}</div>
-        <div className="tt-sidebar-clock-date">{dateStr}</div>
+      <TimeInOutButton
+        clockedIn={clockedIn}
+        onToggle={onToggle}
+        disabled={disabled || (!clockedIn && !hasHoursTarget)}
+      />
+
+      {/* Clock Status */}
+      <div className="tt-sidebar-status-card">
+        <StatusBadge
+          status={clockedIn ? "active" : "inactive"}
+          label={clockedIn ? "Clocked In" : "Not Clocked In"}
+          className="tt-status-badge"
+        />
+        {!clockedIn && !hasHoursTarget && (
+          <p className="tt-sidebar-warning">
+            Weekly hours target not set. Contact your admin to enable Clock In.
+          </p>
+        )}
       </div>
-      
-      <TimeInOutButton clockedIn={clockedIn} onToggle={onToggle} disabled={disabled} />
 
       {/* Navigation */}
       <nav className="tt-sidebar-nav">
+        <div className="tt-sidebar-nav-label">Navigation</div>
         {navItems.map((item) => (
           <button
             key={item.key}
@@ -347,19 +518,6 @@ function Sidebar({ currentTime, activeNav, onNavChange, clockedIn, lastClockIn, 
           </button>
         ))}
       </nav>
-
-      {/* Clock Status */}
-      <div className="tt-sidebar-status-card">
-        <StatusBadge
-          status={clockedIn ? "active" : "inactive"}
-          label={clockedIn ? "Clocked In" : "Not Clocked In"}
-          className="tt-status-badge"
-        />
-        <div className="tt-sidebar-status-meta">
-          {lastClockIn ? `Last clock in: ${formatClockTime(lastClockIn)}` : "Not clocked in yet"}
-        </div>
-      </div>
-
     </header>
   );
 }
@@ -383,16 +541,89 @@ function LogsToolbar() {
     <div className="tt-logs-toolbar">
       <button type="button" className="tt-btn-export">
         <FontAwesomeIcon icon={faDownload} />
-        Export All Logs
       </button>
     </div>
   );
 }
 
-
 // ─── Time Log Table ───────────────────────────────────────────
 
-function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek, weekOffset, loading, totalHours }) {
+// ─── Logs Table Column Definitions (shared TableZ) ─────────────
+
+const LOG_TABLE_COLUMNS = [
+  {
+    key: "dayName",
+    label: "Day",
+    minWidth: 150,
+    render: (row) => (
+      <div className={`tt-day-cell-wrap${row.isToday ? " is-today" : ""}`}>
+        <div className="tt-day-cell-line">
+          <span className="tt-day-marker" aria-hidden="true" />
+          <span className="tt-day-cell">{row.dayName}</span>
+          {row.isToday && <span className="tt-today-badge">Today</span>}
+        </div>
+        <span className="tt-day-date">{row.shortDate}</span>
+      </div>
+    ),
+  },
+  {
+    key: "clockedIn",
+    label: "Clocked In (Date & Time)",
+    minWidth: 160,
+    render: (row) =>
+      row.hasData ? (
+        <div className="tt-clock-cell">
+          <span className="tt-clock-value">{row.clockedInDate}</span>
+          <span className="tt-clock-value">{row.clockedInTime}</span>
+        </div>
+      ) : (
+        <div className="tt-clock-cell">
+          <span className="tt-clock-value subtle tt-placeholder">--</span>
+          <span className="tt-clock-value subtle tt-placeholder">--</span>
+        </div>
+      ),
+  },
+  {
+    key: "clockedOut",
+    label: "Clocked Out (Date & Time)",
+    minWidth: 160,
+    render: (row) =>
+      row.hasData ? (
+        <div className="tt-clock-cell">
+          <span className="tt-clock-value">{row.clockedOutDate}</span>
+          <span className="tt-clock-value">{row.clockedOutTime}</span>
+        </div>
+      ) : (
+        <div className="tt-clock-cell">
+          <span className="tt-clock-value subtle tt-placeholder">--</span>
+          <span className="tt-clock-value subtle tt-placeholder">--</span>
+        </div>
+      ),
+  },
+  {
+    key: "hours",
+    label: "Hours",
+    minWidth: 100,
+    align: "center",
+    render: (row) =>
+      row.hasData ? (
+        <span className="tt-hours-cell">{Number(row.hours).toFixed(2)}</span>
+      ) : (
+        <span className="tt-hours-cell tt-placeholder">--</span>
+      ),
+  },
+];
+
+function TimeLogTable({
+  weekRange,
+  weekRows,
+  onPrevWeek,
+  onNextWeek,
+  onThisWeek,
+  weekOffset,
+  loading,
+  onEdit,
+}) {
   return (
     <div className="tt-table-card">
       {/* Table Header */}
@@ -406,10 +637,6 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
           >
             <FontAwesomeIcon icon={faChevronLeft} />
           </button>
-          <h3 className="tt-table-title">
-            <span>Time Log for</span>
-            <strong>{weekRange.label.replace(" - ", " – ")}</strong>
-          </h3>
           <button
             type="button"
             className="tt-nav-arrow"
@@ -418,6 +645,10 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
           >
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
+          <h3 className="tt-table-title">
+            <span>Time Log for</span>
+            <strong>{weekRange.label.replace(" - ", " – ")}</strong>
+          </h3>
         </div>
         <button
           type="button"
@@ -428,95 +659,633 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
           This Week
         </button>
         <LogsToolbar />
-
       </div>
 
-      {loading ? <LoadingPanel message="Loading time logs..." /> : <table className="tt-table-grid">
-        <thead>
-          <tr>
-            <th>Day</th>
-            <th>Clocked In (Date & Time)</th>
-            <th>Clocked Out (Date & Time)</th>
-            <th>Hours</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {weekRows.map((row) => (
-            <tr key={row.id}>
-              {/* Day */}
-              <td className={`tt-day-cell-wrap ${row.isToday ? "is-today" : ""}`}>
-                <div className="tt-day-cell-line">
-                  <span className="tt-day-marker" aria-hidden="true" />
-                  <span className="tt-day-cell">{row.dayName}</span>
-                  {row.isToday && <span className="tt-today-badge">Today</span>}
+      <TableZ
+        data={weekRows}
+        columns={LOG_TABLE_COLUMNS}
+        rowIdKey="id"
+        actions={[
+          {
+            key: "edit",
+            label: "Edit",
+            icon: "pen",
+            onClick: (row) => onEdit(row),
+          },
+        ]}
+        loading={loading}
+        loadingMessage="Loading time logs..."
+        emptyMessage="No time logs for this week."
+        hideSearch
+        hideFooter
+      />
+    </div>
+  );
+}
+
+// ─── Timesheet Summary Panel (right column) ───────────────────
+
+function SummaryCard({ icon, iconClass, label, sub, value, valueClass }) {
+  return (
+    <div className="tt-summary-card">
+      <div className={`tt-summary-card-icon ${iconClass || ""}`}>
+        <FontAwesomeIcon icon={icon} />
+      </div>
+      <div className="tt-summary-card-text">
+        <div className="tt-summary-card-label">{label}</div>
+        <div className="tt-summary-card-sub">{sub}</div>
+      </div>
+      <span className={`tt-summary-card-value ${valueClass || ""}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function TimesheetSummary({ weekRange, totalHours, regularHours, overtimeHours, weeklyHoursTarget, workedDays }) {
+  const periodLabel = `${weekRange.start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${weekRange.end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+
+  return (
+    <aside
+      className="tt-summary-panel"
+      aria-label="Timesheet summary and actions"
+    >
+      <div className="tt-summary-header">
+        <h3 className="tt-summary-title">Timesheet Summary</h3>
+        <span className="tt-summary-status-pill">
+          <span className="tt-summary-status-dot" aria-hidden="true" />
+          Not Submitted
+        </span>
+      </div>
+
+      <div className="tt-summary-body">
+        {/* Hours Breakdown */}
+        <section className="tt-summary-section">
+          <h4 className="tt-summary-section-label">Hours Breakdown</h4>
+          <p className="tt-summary-period">Period: {periodLabel}</p>
+
+          <SummaryCard
+            icon={faClock}
+            label="Regular Hours"
+            sub={`Target: ${weeklyHoursTarget.toFixed(2)} hrs`}
+            value={`${regularHours.toFixed(2)} hrs`}
+          />
+          <SummaryCard
+            icon={faBolt}
+            iconClass="tt-summary-icon-overtime"
+            label="Overtime"
+            sub="Hours beyond weekly target"
+            value={`${overtimeHours.toFixed(2)} hrs`}
+            valueClass="tt-summary-value-overtime"
+          />
+
+          <div className="tt-summary-total-card">
+            <div className="tt-summary-card-text">
+              <div className="tt-summary-total-label">Total Logged</div>
+              <div className="tt-summary-total-sub">
+                {workedDays} workday{workedDays === 1 ? "" : "s"} recorded
+              </div>
+            </div>
+            <span className="tt-summary-total-value">
+              {totalHours.toFixed(2)} hrs
+            </span>
+          </div>
+        </section>
+
+        {/* Approval Workflow */}
+        <section className="tt-summary-section">
+          <h4 className="tt-summary-section-label">Approval Workflow</h4>
+          <div className="tt-summary-state-card">
+            <div className="tt-summary-state-row">
+              <span className="tt-summary-state-label">Submission State:</span>
+              <span className="tt-summary-state-pill">Pending Submission</span>
+            </div>
+            <div className="tt-summary-approver">
+              <span className="tt-summary-approver-avatar" aria-hidden="true">
+                —
+              </span>
+              <div className="tt-summary-approver-text">
+                <div className="tt-summary-approver-label">
+                  Assigned Approver:
                 </div>
-                <span className="tt-day-date">{row.shortDate}</span>
-              </td>
+                <div className="tt-summary-approver-name">Unassigned</div>
+                <div className="tt-summary-approver-role">
+                  No approver assigned yet
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
-              {/* Clocked In */}
-              <td>
-                {row.hasData ? (
-                  <div className="tt-clock-cell">
-                    <span className="tt-clock-value">{row.clockedInDate}</span>
-                    <span className="tt-clock-value">{row.clockedInTime}</span>
-                  </div>
-                ) : (
-                  <div className="tt-clock-cell">
-                    <span className="tt-clock-value subtle tt-placeholder">--</span>
-                    <span className="tt-clock-value subtle tt-placeholder">--</span>
-                  </div>
-                )}
-              </td>
+        {/* Remarks / Notes */}
+        <section className="tt-summary-section">
+          <label
+            className="tt-summary-remarks-label"
+            htmlFor="submission-remarks"
+          >
+            Remarks / Notes
+          </label>
+          <textarea
+            id="submission-remarks"
+            className="tt-summary-remarks"
+            rows="3"
+            placeholder="e.g., Worked on sprint onboarding and core API integration."
+          />
+          <p className="tt-summary-remarks-hint">
+            Optional notes for your manager before final submission.
+          </p>
+        </section>
 
-              {/* Clocked Out */}
-              <td>
-                {row.hasData ? (
-                  <div className="tt-clock-cell">
-                    <span className="tt-clock-value">{row.clockedOutDate}</span>
-                    <span className="tt-clock-value">{row.clockedOutTime}</span>
-                  </div>
-                ) : (
-                  <div className="tt-clock-cell">
-                    <span className="tt-clock-value subtle tt-placeholder">--</span>
-                    <span className="tt-clock-value subtle tt-placeholder">--</span>
-                  </div>
-                )}
-              </td>
-
-              {/* Hours */}
-              <td>
-                {row.hasData ? (
-                  <span className="tt-hours-cell">{Number(row.hours).toFixed(2)}</span>
-                ) : (
-                  <span className="tt-hours-cell tt-placeholder">--</span>
-                )}
-              </td>
-
-              {/* Action */}
-              <td className="tt-action-cell">
-                <button
-                  type="button"
-                  className="tt-btn-edit"
-                  aria-label={`Edit ${row.dayName} log`}
-                >
-                  <FontAwesomeIcon icon={faPen} />
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>}
-      <div className="tt-table-summary">
-        <div className="tt-summary-metrics">
-          <div><span>Regular Hours:</span><strong>{totalHours.toFixed(2)} hrs</strong></div>
-          <div><span>Overtime:</span><strong className="tt-summary-positive">0.00 hrs</strong></div>
-          <div><span>Total Logged:</span><strong>{totalHours.toFixed(2)} hrs</strong></div>
+        <div className="tt-summary-actions-bar">
+          <button
+            type="button"
+            className="tt-btn-submit tt-panel-submit"
+            disabled
+          >
+            Submit Timesheet for Approval
+          </button>
         </div>
-        <div className="tt-summary-actions">
-          <button type="button" className="tt-btn-draft" disabled>Save as Draft</button>
-          <button type="button" className="tt-btn-submit" disabled>Submit Timesheet for Approval</button>
+      </div>
+    </aside>
+  );
+}
+
+// ─── Edit Time Entry Modal ────────────────────────────────────
+
+function EditEntryModal({ row, onClose, onSave }) {
+  const [clockInDate, setClockInDate] = useState("");
+  const [clockOutDate, setClockOutDate] = useState("");
+  const [clockInTime, setClockInTime] = useState("");
+  const [clockOutTime, setClockOutTime] = useState("");
+  const [reasonId, setReasonId] = useState("");
+  const [notes, setNotes] = useState("");
+  const [reasons, setReasons] = useState([]);
+  const [reasonsLoading, setReasonsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Seed the form fields whenever a new row is opened for editing.
+  // Clock Out defaults to the same date as Clock In (the common case) but
+  // is independently editable for night shifts that cross midnight.
+  useEffect(() => {
+    if (!row) return;
+    setClockInDate(row.isoDate);
+    setClockOutDate(row.clockOutIsoDate || row.isoDate);
+    setClockInTime(toTimeInputValue(row.clockedInTime));
+    setClockOutTime(toTimeInputValue(row.clockedOutTime));
+    setReasonId("");
+    setNotes("");
+  }, [row]);
+
+  // Load the DB-driven reason list each time the modal opens.
+  useEffect(() => {
+    if (!row) return;
+    let cancelled = false;
+    setReasonsLoading(true);
+    loadEditReasons()
+      .then((data) => {
+        if (!cancelled) setReasons(data);
+      })
+      .finally(() => {
+        if (!cancelled) setReasonsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [row]);
+
+  if (!row) return null;
+
+  const canSave = Boolean(reasonId) && Boolean(clockInTime) && !saving;
+
+  const handleSaveClick = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      const result = await onSave({
+        logId: row.logId,
+        clockInDate,
+        clockOutDate,
+        clockInTime,
+        clockOutTime,
+        reasonId: Number(reasonId),
+        notes,
+      });
+      if (!result?.success) return; // keep modal open on failure so the user can retry
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="tt-modal-mask" onClick={onClose} role="presentation">
+      <div
+        className="tt-modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit Time Entry"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="tt-modal-header">
+          <div>
+            <h3 className="tt-modal-title">Edit Time Entry</h3>
+            <p className="tt-modal-subtitle">
+              {row.dayName}, {row.shortDate}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="tt-modal-close"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            ×
+          </button>
         </div>
+
+        <div className="tt-modal-body">
+          <div className="tt-modal-grid">
+            <label className="tt-modal-field">
+              <span className="tt-modal-label">Clock In Date</span>
+              <input
+                type="date"
+                className="tt-modal-input"
+                value={clockInDate}
+                onChange={(event) => setClockInDate(event.target.value)}
+              />
+            </label>
+            <label className="tt-modal-field">
+              <span className="tt-modal-label">Clock In Time</span>
+              <input
+                type="time"
+                className="tt-modal-input"
+                value={clockInTime}
+                onChange={(event) => setClockInTime(event.target.value)}
+              />
+            </label>
+            <label className="tt-modal-field">
+              <span className="tt-modal-label">Clock Out Date</span>
+              <input
+                type="date"
+                className="tt-modal-input"
+                value={clockOutDate}
+                onChange={(event) => setClockOutDate(event.target.value)}
+              />
+            </label>
+            <label className="tt-modal-field">
+              <span className="tt-modal-label">Clock Out Time</span>
+              <input
+                type="time"
+                className="tt-modal-input"
+                value={clockOutTime}
+                onChange={(event) => setClockOutTime(event.target.value)}
+              />
+            </label>
+          </div>
+
+          <label className="tt-modal-field">
+            <span className="tt-modal-label">Reason for Edit</span>
+            <select
+              className="tt-modal-select"
+              value={reasonId}
+              onChange={(event) => setReasonId(event.target.value)}
+              disabled={reasonsLoading}
+            >
+              <option value="">{reasonsLoading ? "Loading..." : "Select a reason"}</option>
+              {reasons.map((reason) => (
+                <option key={reason.status_id} value={reason.status_id}>
+                  {reason.status_name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="tt-modal-field">
+            <span className="tt-modal-label">Notes / Memo</span>
+            <textarea
+              className="tt-modal-textarea"
+              rows="2"
+              placeholder="Optional clarification..."
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="tt-modal-footer">
+          <button
+            type="button"
+            className="tt-modal-btn-cancel"
+            onClick={onClose}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="tt-modal-btn-save"
+            onClick={handleSaveClick}
+            disabled={!canSave}
+          >
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin Setup: Employee Hours Targets ───────────────────────
+
+function EmployeeHoursSection() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    loadEmployeeHoursTargets()
+      .then((data) => setRows(data))
+      .catch(() => toastError("Unable to load employee hours targets.", "Setup"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadEmployeeHoursTargets()
+      .then((data) => {
+        if (!cancelled) setRows(data);
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load employee hours targets.", "Setup");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const columns = useMemo(
+    () => [
+      { key: "name", label: "Employee", minWidth: 220 },
+      {
+        key: "weekly_hours_target",
+        label: "Weekly Hours Target",
+        minWidth: 200,
+        render: (row) => (
+          <InlineEditCell
+            value={row.weekly_hours_target}
+            type="number"
+            onCommit={async (nextValue) => {
+              const result = await setUserWeeklyHoursTarget(row.user_id, nextValue);
+              if (result.success) {
+                toastSuccess(`Updated ${row.name}'s weekly target.`, "Setup");
+                reload();
+              } else {
+                toastError(result.error || "Failed to update.", "Setup");
+              }
+            }}
+          />
+        ),
+      },
+    ],
+    [reload],
+  );
+
+  return (
+    <TableZ
+      data={rows}
+      columns={columns}
+      rowIdKey="user_id"
+      showActionColumn={false}
+      loading={loading}
+      loadingMessage="Loading employees..."
+      emptyMessage="No employees found for this module."
+      hideFooter
+    />
+  );
+}
+
+// ─── Admin Setup: Edit Reasons ──────────────────────────────────
+
+function EditReasonModal({ reason, onClose, onSave }) {
+  const [statusCode, setStatusCode] = useState(reason?.status_code || "");
+  const [statusName, setStatusName] = useState(reason?.status_name || "");
+  const [displayOrder, setDisplayOrder] = useState(reason?.display_order ?? 0);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave({
+        statusId: reason?.status_id || null,
+        statusCode,
+        statusName,
+        displayOrder,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      show
+      onHide={onClose}
+      title={reason ? "Edit Reason" : "Add Reason"}
+      footer={(
+        <>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" onClick={handleSave} loading={saving}>
+            Save
+          </Button>
+        </>
+      )}
+    >
+      <label className="tt-modal-field">
+        <span className="tt-modal-label">Code</span>
+        <Input
+          value={statusCode}
+          onChange={(event) => setStatusCode(event.target.value)}
+          placeholder="e.g. FORGOT_CLOCK_OUT"
+        />
+      </label>
+      <label className="tt-modal-field">
+        <span className="tt-modal-label">Name</span>
+        <Input
+          value={statusName}
+          onChange={(event) => setStatusName(event.target.value)}
+          placeholder="e.g. Forgot to clock out"
+        />
+      </label>
+      <label className="tt-modal-field">
+        <span className="tt-modal-label">Display Order</span>
+        <Input
+          type="number"
+          value={displayOrder}
+          onChange={(event) => setDisplayOrder(event.target.value)}
+        />
+      </label>
+    </Modal>
+  );
+}
+
+function EditReasonsSection() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modalReason, setModalReason] = useState(null); // null = closed, {} = new, row = editing
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    loadEditReasonsAdmin()
+      .then((data) => setRows(data))
+      .catch(() => toastError("Unable to load edit reasons.", "Setup"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadEditReasonsAdmin()
+      .then((data) => {
+        if (!cancelled) setRows(data);
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load edit reasons.", "Setup");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleToggleActive = useCallback(
+    async (row, nextActive) => {
+      const result = await setEditReasonActive(row.status_id, nextActive);
+      if (result.success) {
+        toastSuccess(nextActive ? "Reason restored." : "Reason deactivated.", "Setup");
+        reload();
+      } else {
+        toastError(result.error || "Failed to update reason.", "Setup");
+      }
+    },
+    [reload],
+  );
+
+  const columns = useMemo(
+    () => [
+      { key: "status_code", label: "Code", minWidth: 160 },
+      { key: "status_name", label: "Name", minWidth: 220 },
+      { key: "display_order", label: "Order", minWidth: 90, align: "center" },
+      {
+        key: "is_active",
+        label: "Status",
+        minWidth: 120,
+        render: (row) => <StatusBadge status={row.is_active ? "active" : "inactive"} />,
+      },
+    ],
+    [],
+  );
+
+  const actions = useMemo(
+    () => [
+      { key: "edit", label: "Edit", icon: "pen", onClick: (row) => setModalReason(row) },
+      {
+        key: "deactivate",
+        label: "Deactivate",
+        icon: "ban",
+        type: "danger",
+        confirm: true,
+        confirmMessage: (row) => `Deactivate "${row.status_name}"?`,
+        visible: (row) => row.is_active,
+        onClick: (row) => handleToggleActive(row, false),
+      },
+      {
+        key: "restore",
+        label: "Restore",
+        icon: "rotate-left",
+        visible: (row) => !row.is_active,
+        onClick: (row) => handleToggleActive(row, true),
+      },
+    ],
+    [handleToggleActive],
+  );
+
+  return (
+    <>
+      <div className="tt-setup-toolbar">
+        <Button type="button" variant="primary" onClick={() => setModalReason({})}>
+          <FontAwesomeIcon icon={faPlus} /> Add Reason
+        </Button>
+      </div>
+
+      <TableZ
+        data={rows}
+        columns={columns}
+        rowIdKey="status_id"
+        actions={actions}
+        loading={loading}
+        loadingMessage="Loading reasons..."
+        emptyMessage="No edit reasons configured."
+        hideSearch
+        hideFooter
+      />
+
+      {modalReason && (
+        <EditReasonModal
+          reason={modalReason.status_id ? modalReason : null}
+          onClose={() => setModalReason(null)}
+          onSave={async (formData) => {
+            const result = await saveEditReason(formData);
+            if (result.success) {
+              toastSuccess("Reason saved.", "Setup");
+              setModalReason(null);
+              reload();
+            } else {
+              toastError(result.error || "Failed to save reason.", "Setup");
+            }
+            return result;
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function AdminSetupPage() {
+  const [subTab, setSubTab] = useState("hours");
+
+  return (
+    <div className="tt-setup-page-body">
+      <div className="tt-page-header">
+        <div className="tt-page-header-text">
+          <h1 className="tt-page-title">Setup</h1>
+          <p className="tt-page-subtitle">Admin-only configuration for the Time Tracker module.</p>
+        </div>
+      </div>
+
+      <div className="tt-setup-subtabs">
+        <button
+          type="button"
+          className={`tt-setup-subtab ${subTab === "hours" ? "active" : ""}`}
+          onClick={() => setSubTab("hours")}
+        >
+          Employee Hours
+        </button>
+        <button
+          type="button"
+          className={`tt-setup-subtab ${subTab === "reasons" ? "active" : ""}`}
+          onClick={() => setSubTab("reasons")}
+        >
+          Edit Reasons
+        </button>
+      </div>
+
+      <div className="tt-setup-content-scroll">
+        {subTab === "hours" ? <EmployeeHoursSection /> : <EditReasonsSection />}
       </div>
     </div>
   );
@@ -527,9 +1296,11 @@ function TimeLogTable({ weekRange, weekRows, onPrevWeek, onNextWeek, onThisWeek,
 // ═══════════════════════════════════════════════════════════════
 
 export default function TimeTrackerView({ initialData }) {
+  const [roles, setRoles] = useState(initialData?.roles || []);
+  const [orgRoles, setOrgRoles] = useState(initialData?.orgRoles || []);
   const permissions = useMemo(
-    () => getTimeTrackerPermissions(initialData?.roles, initialData?.orgRoles),
-    [initialData?.roles, initialData?.orgRoles],
+    () => getTimeTrackerPermissions(roles, orgRoles),
+    [roles, orgRoles],
   );
   const {
     currentTime,
@@ -544,11 +1315,44 @@ export default function TimeTrackerView({ initialData }) {
     weekOffset,
     weekLoading,
     totalHours,
+    regularHours,
+    overtimeHours,
+    weeklyHoursTarget,
+    hasHoursTarget,
     clockedIn,
     lastClockIn,
     handleClockToggle,
+    handleSaveEdit,
     toggling,
   } = useLogsPage(initialData, permissions);
+
+  // Keep sidebar tab visibility in sync with role changes made elsewhere
+  // (e.g. User Master Setup). Refetches whenever the Logs tab becomes
+  // active, skipping the first render since initialData is already fresh.
+  const isFirstPermissionsRender = useRef(true);
+  useEffect(() => {
+    if (isFirstPermissionsRender.current) {
+      isFirstPermissionsRender.current = false;
+      return;
+    }
+    if (activeNav !== "logs") return;
+
+    let cancelled = false;
+    // Ignore refetch failures — keep showing the current (stale) permissions.
+    loadCurrentUserPermissionsData()
+      .then((data) => {
+        if (cancelled) return;
+        setRoles(data.roles || []);
+        setOrgRoles(data.orgRoles || []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNav]);
+
+  const [editingRow, setEditingRow] = useState(null);
+  const workedDays = weekRows.filter((row) => row.hasData).length;
 
   return (
     <div className="tt-app-layout">
@@ -562,13 +1366,13 @@ export default function TimeTrackerView({ initialData }) {
         navItems={navItems}
         onToggle={handleClockToggle}
         disabled={toggling}
+        hasHoursTarget={hasHoursTarget}
       />
 
       {/* Main Content */}
       <main className="tt-main">
         {activeNav === "logs" && (
           <>
-            {toggling && <LoadingPanel message={clockedIn ? "Clocking out..." : "Clocking in..."} />}
             <TimeLogTable
               weekRange={weekRange}
               weekRows={weekRows}
@@ -577,7 +1381,7 @@ export default function TimeTrackerView({ initialData }) {
               onThisWeek={goThisWeek}
               weekOffset={weekOffset}
               loading={weekLoading}
-              totalHours={totalHours}
+              onEdit={setEditingRow}
             />
           </>
         )}
@@ -586,7 +1390,9 @@ export default function TimeTrackerView({ initialData }) {
           <div className="tt-page-header">
             <div className="tt-page-header-text">
               <h1 className="tt-page-title">Timesheets</h1>
-              <p className="tt-page-subtitle">View, edit, and print employee timesheets. Coming soon.</p>
+              <p className="tt-page-subtitle">
+                View, edit, and print employee timesheets. Coming soon.
+              </p>
             </div>
           </div>
         )}
@@ -595,11 +1401,44 @@ export default function TimeTrackerView({ initialData }) {
           <div className="tt-page-header">
             <div className="tt-page-header-text">
               <h1 className="tt-page-title">Approvals</h1>
-              <p className="tt-page-subtitle">Approve or return submitted timesheets. Coming soon.</p>
+              <p className="tt-page-subtitle">
+                Approve or return submitted timesheets. Coming soon.
+              </p>
             </div>
           </div>
         )}
+
+        {activeNav === "setup" && <AdminSetupPage />}
       </main>
+
+      {activeNav === "logs" && (
+        <TimesheetSummary
+          weekRange={weekRange}
+          totalHours={totalHours}
+          regularHours={regularHours}
+          overtimeHours={overtimeHours}
+          weeklyHoursTarget={weeklyHoursTarget}
+          workedDays={workedDays}
+        />
+      )}
+
+      <EditEntryModal
+        row={editingRow}
+        onClose={() => setEditingRow(null)}
+        onSave={async (formData) => {
+          const result = await handleSaveEdit(formData);
+          if (result.success) setEditingRow(null);
+          return result;
+        }}
+      />
+
+      {/* Modal-style loading overlay for clock in / clock out. Non-blocking —
+          users can keep clicking / working behind it while processing. */}
+      {toggling && (
+        <LoadingPanel
+          message={clockedIn ? "Clocking out..." : "Clocking in..."}
+        />
+      )}
     </div>
   );
 }
