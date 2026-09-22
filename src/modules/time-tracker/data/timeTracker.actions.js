@@ -1020,11 +1020,95 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
 // ── Approvals ────────────────────────────────────────────────
 
 /**
+ * Read-only daily logs for a submitted timesheet, for the Approvals detail
+ * row. Authorized only for the submission's own owner, an approver on any
+ * stage of its workflow, or an Admin — not just anyone who guesses an id.
+ */
+export async function loadSubmissionLogs(submissionId) {
+  const userId = await getSessionUserId();
+  if (!userId) return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: submission } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("user_id")
+    .eq("submission_id", submissionId)
+    .maybeSingle();
+  if (!submission) return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
+
+  const isOwner = submission.user_id === userId;
+
+  let isAuthorizedApprover = false;
+  if (!isOwner) {
+    const { data: instance } = await supabase
+      .from("wfk_t_workflowinstance")
+      .select("instance_id")
+      .eq("app_id", TIME_TRACKER_APP_ID)
+      .eq("document_id", submissionId)
+      .maybeSingle();
+
+    if (instance) {
+      const { data: stageInstances } = await supabase
+        .from("wfk_t_stageinstance")
+        .select("wfs_id")
+        .eq("instance_id", instance.instance_id);
+      const wfsIds = [...new Set((stageInstances || []).map((si) => si.wfs_id).filter(Boolean))];
+
+      if (wfsIds.length) {
+        const { data: participants } = await supabase
+          .from("wfk_m_stageparticipant")
+          .select("orgrole_id")
+          .in("wfs_id", wfsIds)
+          .eq("is_active", true);
+        const orgRoleIds = [...new Set((participants || []).map((p) => p.orgrole_id).filter(Boolean))];
+
+        if (orgRoleIds.length) {
+          const { data: userOrgRole } = await supabase
+            .from("wfk_m_userorgrole")
+            .select("user_orgrole_id")
+            .eq("user_id", userId)
+            .in("role_id", orgRoleIds)
+            .eq("is_active", true)
+            .limit(1)
+            .maybeSingle();
+          isAuthorizedApprover = Boolean(userOrgRole);
+        }
+      }
+    }
+  }
+
+  const { roles } = await loadTimeTrackerRoles(supabase, userId);
+  const isAdmin = roles.some(
+    (r) => String(r?.role_name || "").trim().toLowerCase() === "admin" && r.is_active !== false,
+  );
+
+  if (!isOwner && !isAuthorizedApprover && !isAdmin) {
+    return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
+  }
+
+  const { data, error } = await supabase
+    .from("time_t_logs")
+    .select("*")
+    .eq("submission_id", submissionId)
+    .order("clock_in_date", { ascending: true });
+
+  if (error) {
+    console.error("loadSubmissionLogs error:", describeError(error));
+    return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
+  }
+
+  const { weeklyHoursTarget } = await loadHoursTargetInfo(supabase, submission.user_id);
+
+  return { logs: data || [], weeklyHoursTarget };
+}
+
+/**
  * Load this user's approval queue: pending items awaiting their action at
  * whichever stage their org role(s) participate in, plus history of items
  * they've personally acted on before (approved or returned).
  */
-export async function loadApprovalQueue() {
+export async function loadApprovalQueue(weekStartDate) {
   const userId = await getSessionUserId();
   if (!userId) return [];
 
@@ -1103,6 +1187,7 @@ export async function loadApprovalQueue() {
       const instance = instanceById.get(si.instance_id);
       const submission = submissionById.get(instance?.document_id);
       if (!submission) return null;
+      if (weekStartDate && submission.week_start_date !== weekStartDate) return null;
 
       return {
         stageinstance_id: si.stageinstance_id,

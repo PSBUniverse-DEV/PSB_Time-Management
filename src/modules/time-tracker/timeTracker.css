@@ -2023,3 +2023,69 @@
   line-height: 1.4;
   color: #b45309;
 }
+
+/* ─── Approvals Detail Row ──────────────────────────────────── */
+
+.tt-approval-detail {
+  padding: 1rem 1.5rem;
+  background: #fbfdfd;
+}
+
+.tt-approval-detail-loading {
+  padding: 1rem 1.5rem;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.tt-approval-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.tt-approval-detail-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  color: #64748b;
+  font-weight: 600;
+  border-bottom: 1px solid #e1ebec;
+}
+
+.tt-approval-detail-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #edf3f4;
+}
+
+.tt-approval-detail-empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 1rem 0.75rem;
+}
+
+.tt-approval-detail-remarks {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e1ebec;
+}
+
+.tt-approval-detail-remarks-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.tt-approval-detail-remarks-text {
+  margin: 0.25rem 0 0;
+  font-size: 13px;
+  color: #16383e;
+}
+
+.tt-approval-detail-summary {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e1ebec;
+  font-size: 13px;
+  color: #16383e;
+}

@@ -44,6 +44,7 @@ import {
   clockIn as clockInAction,
   clockOut as clockOutAction,
   loadApprovalQueue,
+  loadSubmissionLogs,
   loadCurrentUserHoursTarget,
   loadCurrentUserPermissionsData,
   loadEditReasons,
@@ -1418,22 +1419,129 @@ function ApprovalActionModal({ mode, row, onClose, onSubmit }) {
   );
 }
 
-function ApprovalsPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [actionModal, setActionModal] = useState(null); // null | { mode, row }
+const APPROVAL_STATUS_TABS = [
+  { key: "pending", label: "Pending" },
+  { key: "approved", label: "Approved" },
+  { key: "returned", label: "Returned" },
+  { key: "all", label: "All" },
+];
 
-  const reload = useCallback(() => {
-    setLoading(true);
-    loadApprovalQueue()
-      .then((data) => setRows(data))
-      .catch(() => toastError("Unable to load approvals.", "Approvals"))
-      .finally(() => setLoading(false));
-  }, []);
+function ApprovalDetailPanel({ row }) {
+  const [logs, setLogs] = useState([]);
+  const [weeklyHoursTarget, setWeeklyHoursTarget] = useState(40);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    loadApprovalQueue()
+    loadSubmissionLogs(row.submission_id)
+      .then((data) => {
+        if (!cancelled) {
+          setLogs(data.logs || []);
+          setWeeklyHoursTarget(Number(data.weeklyHoursTarget) || 40);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load logs.", "Approvals");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [row.submission_id]);
+
+  const totalHoursRendered = useMemo(
+    () => logs.reduce((sum, log) => sum + (Number(log.total_hours) || 0), 0),
+    [logs],
+  );
+
+  if (loading) {
+    return <div className="tt-approval-detail-loading">Loading logs...</div>;
+  }
+
+  return (
+    <div className="tt-approval-detail">
+      <table className="tt-approval-detail-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Clocked In</th>
+            <th>Clocked Out</th>
+            <th>Hours</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="tt-approval-detail-empty">
+                No logs recorded for this week.
+              </td>
+            </tr>
+          ) : (
+            logs.map((log) => (
+              <tr key={log.log_id}>
+                <td>{log.clock_in_date}</td>
+                <td>{log.clock_in_time ? `${log.clock_in_date} ${log.clock_in_time}` : "--"}</td>
+                <td>{log.clock_out_time ? `${log.clock_out_date} ${log.clock_out_time}` : "--"}</td>
+                <td>{log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--"}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+
+      <div className="tt-approval-detail-summary">
+        <span>
+          <strong>Total Hours:</strong> {totalHoursRendered.toFixed(2)} hrs
+        </span>
+        <span>
+          <strong>Target Hours:</strong> {weeklyHoursTarget.toFixed(2)} hrs
+        </span>
+      </div>
+
+      <div className="tt-approval-detail-remarks">
+        <span className="tt-approval-detail-remarks-label">Remarks / Notes:</span>
+        <p className="tt-approval-detail-remarks-text">{row.remarks || "No remarks provided."}</p>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalsPage() {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [statusTab, setStatusTab] = useState("pending");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [actionModal, setActionModal] = useState(null); // null | { mode, row }
+  const [expandedRowId, setExpandedRowId] = useState(null);
+
+  const weekRange = useMemo(() => {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const formatDate = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return {
+      start: monday,
+      end: sunday,
+      fullLabel: `Approvals for ${formatDate(monday)} - ${formatDate(sunday)}`,
+    };
+  }, [weekOffset]);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    loadApprovalQueue(toDateStr(weekRange.start))
+      .then((data) => setRows(data))
+      .catch(() => toastError("Unable to load approvals.", "Approvals"))
+      .finally(() => setLoading(false));
+  }, [weekRange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadApprovalQueue(toDateStr(weekRange.start))
       .then((data) => {
         if (!cancelled) setRows(data);
       })
@@ -1446,17 +1554,16 @@ function ApprovalsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [weekRange]);
+
+  const filteredRows = useMemo(() => {
+    if (statusTab === "all") return rows;
+    return rows.filter((row) => String(row.workflow_status_name || "").toLowerCase() === statusTab);
+  }, [rows, statusTab]);
 
   const columns = useMemo(
     () => [
       { key: "requestor_name", label: "Employee", minWidth: 180 },
-      {
-        key: "week_start_date",
-        label: "Week",
-        minWidth: 200,
-        render: (row) => `${row.week_start_date} – ${row.week_end_date}`,
-      },
       {
         key: "total_hours",
         label: "Hours",
@@ -1522,26 +1629,58 @@ function ApprovalsPage() {
     [],
   );
 
+  const goPreviousWeek = useCallback(() => setWeekOffset((prev) => prev - 1), []);
+  const goNextWeek = useCallback(() => setWeekOffset((prev) => prev + 1), []);
+  const goThisWeek = useCallback(() => setWeekOffset(0), []);
+
   return (
     <div className="tt-setup-page-body">
-      <div className="tt-page-header">
-        <div className="tt-page-header-text">
-          <h1 className="tt-page-title">Approvals</h1>
-          <p className="tt-page-subtitle">Approve or return submitted timesheets.</p>
+      <div className="tt-table-header">
+        <div className="tt-table-header-left">
+          <button type="button" onClick={goPreviousWeek} className="tt-nav-arrow" aria-label="Previous week">
+            <FontAwesomeIcon icon={faChevronLeft} />
+          </button>
+          <button type="button" onClick={goNextWeek} className="tt-nav-arrow" aria-label="Next week">
+            <FontAwesomeIcon icon={faChevronRight} />
+          </button>
+          <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
         </div>
+        <div className="tt-table-header-right">
+          <button type="button" onClick={goThisWeek} className="tt-pill-week">
+            This Week
+          </button>
+        </div>
+      </div>
+
+      <div className="tt-setup-subtabs">
+        {APPROVAL_STATUS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`tt-setup-subtab ${statusTab === tab.key ? "active" : ""}`}
+            onClick={() => setStatusTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <div className="tt-setup-content-scroll">
         <TableZ
-          data={rows}
+          data={filteredRows}
           columns={columns}
           rowIdKey="stageinstance_id"
           actions={actions}
           loading={loading}
           loadingMessage="Loading approvals..."
-          emptyMessage="No timesheets pending your approval."
+          emptyMessage={`No ${statusTab === "all" ? "" : `${statusTab} `}timesheets for this week.`}
           hideSearch
           hideFooter
+          selectedRowId={expandedRowId}
+          onRowClick={(row) =>
+            setExpandedRowId((prev) => (prev === row.stageinstance_id ? null : row.stageinstance_id))
+          }
+          renderDetail={(row) => <ApprovalDetailPanel row={row} />}
         />
       </div>
 
