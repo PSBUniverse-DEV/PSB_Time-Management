@@ -1796,6 +1796,13 @@
   padding: 0.65rem 1.25rem;
 }
 
+.tt-summary-warning {
+  margin: 0.5rem 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #b45309;
+}
+
 /* ─── Edit Time Entry modal ───────────────────────────────── */
 .tt-modal-mask {
   position: fixed;

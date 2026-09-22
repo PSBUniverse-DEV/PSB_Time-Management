@@ -6,6 +6,7 @@
 
 import { getCurrentSession } from "@/core/auth/session.service";
 import { getSupabaseAdmin } from "@/core/supabase/admin";
+import { getTimeTrackerPermissions } from "./timeTracker.permissions";
 import {
   DEFAULT_LATE_DEADLINE,
   DEFAULT_GRACE_PERIOD,
@@ -115,6 +116,58 @@ export async function loadCurrentUserPermissionsData() {
 
   const supabase = getSupabaseAdmin();
   return loadTimeTrackerRoles(supabase, userId);
+}
+
+/** Monday of the week containing a "YYYY-MM-DD" date string. */
+function getMondayOfWeekStr(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDay(); // 0 = Sunday
+  const diff = (day + 6) % 7;
+  d.setDate(d.getDate() - diff);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+const LOCKED_SUBMISSION_STATUSES = new Set(["pending", "approved"]);
+
+/**
+ * Whether the week containing `clockInDate` is locked from editing — i.e.
+ * it has a submitted timesheet whose workflow instance is currently
+ * Pending or Approved. Reads wfk_* tables read-only; Time Tracker never
+ * writes to the workflow engine's own setup or transactional tables.
+ */
+async function isWeekLocked(supabase, userId, clockInDate) {
+  const weekStart = getMondayOfWeekStr(clockInDate);
+
+  const { data: submission } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("submission_id")
+    .eq("user_id", userId)
+    .eq("week_start_date", weekStart)
+    .maybeSingle();
+
+  if (!submission) return { locked: false, statusName: null };
+
+  const { data: instance } = await supabase
+    .from("wfk_t_workflowinstance")
+    .select("status_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("document_id", submission.submission_id)
+    .maybeSingle();
+
+  if (!instance?.status_id) return { locked: false, statusName: null };
+
+  const { data: status } = await supabase
+    .from("wfk_s_status")
+    .select("status_name")
+    .eq("status_id", instance.status_id)
+    .maybeSingle();
+
+  const statusName = String(status?.status_name || "").trim();
+  const locked = LOCKED_SUBMISSION_STATUSES.has(statusName.toLowerCase());
+  return { locked, statusName };
 }
 
 /** Look up the numeric id for a status code (e.g. "CLOCKED_IN"). */
@@ -560,6 +613,14 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
 
   const supabase = getSupabaseAdmin();
 
+  const { locked, statusName } = await isWeekLocked(supabase, userId, clockInDate);
+  if (locked) {
+    return {
+      success: false,
+      error: `This week's timesheet is ${statusName} and can no longer be edited.`,
+    };
+  }
+
   // The FK on edit_reason_id can't enforce the tag split by itself (it's a
   // shared lookup table with session-status rows too), so re-validate the
   // submitted reason actually belongs to the edit_reason list server-side
@@ -651,6 +712,565 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
     return { success: false, error: "Failed to create entry." };
   }
   return { success: true, record: data };
+}
+
+const WORKFLOW_STATUS_PENDING = "Pending";
+
+/** Look up a workflow status_id by name (wfk_s_status). */
+async function getWorkflowStatusId(supabase, statusName) {
+  const { data, error } = await supabase
+    .from("wfk_s_status")
+    .select("status_id")
+    .eq("status_name", statusName)
+    .maybeSingle();
+
+  if (error || !data) {
+    throw new Error(`Unable to resolve workflow status_id for "${statusName}"`);
+  }
+  return data.status_id;
+}
+
+/**
+ * Read the current submission + workflow status for a given week, for
+ * display (Timesheet Summary badge) — not a gate, just a read.
+ */
+export async function loadWeekSubmissionStatus(weekStartDate) {
+  const userId = await getSessionUserId();
+  if (!userId) {
+    return {
+      hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
+      approverName: null, approverRoleName: null,
+    };
+  }
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: submission } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("submission_id, submitted_at, remarks")
+    .eq("user_id", userId)
+    .eq("week_start_date", weekStartDate)
+    .maybeSingle();
+
+  if (!submission) {
+    return {
+      hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
+      approverName: null, approverRoleName: null,
+    };
+  }
+
+  const { data: instance } = await supabase
+    .from("wfk_t_workflowinstance")
+    .select("status_id, current_wfs_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("document_id", submission.submission_id)
+    .maybeSingle();
+
+  let statusName = null;
+  if (instance?.status_id) {
+    const { data: status } = await supabase
+      .from("wfk_s_status")
+      .select("status_name")
+      .eq("status_id", instance.status_id)
+      .maybeSingle();
+    statusName = status?.status_name || null;
+  }
+
+  let approverName = null;
+  let approverRoleName = null;
+
+  if (instance?.current_wfs_id) {
+    const { data: participant } = await supabase
+      .from("wfk_m_stageparticipant")
+      .select("orgrole_id")
+      .eq("wfs_id", instance.current_wfs_id)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+
+    if (participant?.orgrole_id) {
+      const [{ data: orgRole }, { data: userOrgRoles }] = await Promise.all([
+        supabase
+          .from("wfk_s_orgrole")
+          .select("name")
+          .eq("orgrole_id", participant.orgrole_id)
+          .maybeSingle(),
+        supabase
+          .from("wfk_m_userorgrole")
+          .select("user_id, is_primary")
+          .eq("role_id", participant.orgrole_id)
+          .eq("is_active", true)
+          .order("is_primary", { ascending: false })
+          .limit(1),
+      ]);
+
+      approverRoleName = orgRole?.name || null;
+      const approverUserId = userOrgRoles?.[0]?.user_id;
+
+      if (approverUserId) {
+        const { data: approverUser } = await supabase
+          .from("psb_s_user")
+          .select("first_name, last_name, username")
+          .eq("user_id", approverUserId)
+          .maybeSingle();
+
+        approverName = approverUser
+          ? `${approverUser.first_name || ""} ${approverUser.last_name || ""}`.trim() || approverUser.username
+          : null;
+      }
+    }
+  }
+
+  return {
+    hasSubmission: true,
+    statusName,
+    submittedAt: submission.submitted_at,
+    remarks: submission.remarks || "",
+    approverName,
+    approverRoleName,
+  };
+}
+
+/**
+ * Submit (or resubmit) a week's timesheet for approval.
+ * @param {Object} params
+ * @param {string} params.weekStartDate - "YYYY-MM-DD", must be a Monday.
+ * @param {string} params.weekEndDate - "YYYY-MM-DD".
+ * @param {string} [params.remarks] - optional note for the approver.
+ */
+export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const supabase = getSupabaseAdmin();
+
+  const { roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId);
+  const { isRequestor } = getTimeTrackerPermissions(roles, orgRoles);
+  if (!isRequestor) {
+    return {
+      success: false,
+      error: 'You don\'t have the "Timesheet Requestor - VA" org role required to submit a timesheet.',
+    };
+  }
+
+  const { data: existingSubmission } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("week_start_date", weekStartDate)
+    .maybeSingle();
+
+  if (existingSubmission) {
+    const { locked, statusName } = await isWeekLocked(supabase, userId, weekStartDate);
+    if (locked) {
+      return {
+        success: false,
+        error: `This week's timesheet is already ${statusName} and doesn't need to be submitted again.`,
+      };
+    }
+  }
+
+  const { data: logs } = await supabase
+    .from("time_t_logs")
+    .select("total_hours")
+    .eq("user_id", userId)
+    .gte("clock_in_date", weekStartDate)
+    .lte("clock_in_date", weekEndDate);
+
+  const totalHours = (logs || []).reduce((sum, l) => sum + (Number(l.total_hours) || 0), 0);
+  const { weeklyHoursTarget } = await loadHoursTargetInfo(supabase, userId);
+  const regularHours = Math.min(totalHours, weeklyHoursTarget);
+  const overtimeHours = Math.max(totalHours - weeklyHoursTarget, 0);
+
+  const { data: workflow, error: workflowError } = await supabase
+    .from("wfk_s_workflow")
+    .select("wf_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+
+  if (workflowError || !workflow) {
+    return { success: false, error: "No active approval workflow is configured for Time Tracker." };
+  }
+
+  const { data: firstStage, error: stageError } = await supabase
+    .from("wfk_s_workflowstages")
+    .select("wfs_id")
+    .eq("wf_id", workflow.wf_id)
+    .eq("is_active", true)
+    .order("stage_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (stageError || !firstStage) {
+    return { success: false, error: "The approval workflow has no stages configured." };
+  }
+
+  const pendingStatusId = await getWorkflowStatusId(supabase, WORKFLOW_STATUS_PENDING);
+  const now = new Date().toISOString();
+
+  let submission;
+  if (existingSubmission) {
+    const { data, error } = await supabase
+      .from("time_t_timesheetsubmissions")
+      .update({
+        week_end_date: weekEndDate,
+        total_hours: totalHours,
+        regular_hours: regularHours,
+        overtime_hours: overtimeHours,
+        remarks: remarks || null,
+        submitted_at: now,
+        updated_at: now,
+        updated_by: userId,
+      })
+      .eq("submission_id", existingSubmission.submission_id)
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("submitTimesheet update submission error:", describeError(error));
+      return { success: false, error: "Failed to resubmit timesheet." };
+    }
+    submission = data;
+  } else {
+    const { data, error } = await supabase
+      .from("time_t_timesheetsubmissions")
+      .insert({
+        user_id: userId,
+        week_start_date: weekStartDate,
+        week_end_date: weekEndDate,
+        total_hours: totalHours,
+        regular_hours: regularHours,
+        overtime_hours: overtimeHours,
+        remarks: remarks || null,
+        submitted_at: now,
+        created_by: userId,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("submitTimesheet insert submission error:", describeError(error));
+      return { success: false, error: "Failed to submit timesheet." };
+    }
+    submission = data;
+  }
+
+  await supabase
+    .from("time_t_logs")
+    .update({ submission_id: submission.submission_id })
+    .eq("user_id", userId)
+    .gte("clock_in_date", weekStartDate)
+    .lte("clock_in_date", weekEndDate);
+
+  const { data: existingInstance } = await supabase
+    .from("wfk_t_workflowinstance")
+    .select("instance_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("document_id", submission.submission_id)
+    .maybeSingle();
+
+  let instanceId;
+  if (existingInstance) {
+    const { error } = await supabase
+      .from("wfk_t_workflowinstance")
+      .update({ status_id: pendingStatusId, current_wfs_id: firstStage.wfs_id, completed_at: null })
+      .eq("instance_id", existingInstance.instance_id);
+
+    if (error) {
+      console.error("submitTimesheet update instance error:", describeError(error));
+      return { success: false, error: "Failed to restart the approval workflow." };
+    }
+    instanceId = existingInstance.instance_id;
+  } else {
+    const { data, error } = await supabase
+      .from("wfk_t_workflowinstance")
+      .insert({
+        app_id: TIME_TRACKER_APP_ID,
+        wf_id: workflow.wf_id,
+        status_id: pendingStatusId,
+        current_wfs_id: firstStage.wfs_id,
+        document_id: submission.submission_id,
+        started_at: now,
+        created_by: userId,
+      })
+      .select("instance_id")
+      .single();
+
+    if (error) {
+      console.error("submitTimesheet insert instance error:", describeError(error));
+      return { success: false, error: "Failed to start the approval workflow." };
+    }
+    instanceId = data.instance_id;
+  }
+
+  const { error: stageInstanceError } = await supabase
+    .from("wfk_t_stageinstance")
+    .insert({ instance_id: instanceId, wfs_id: firstStage.wfs_id, status_id: pendingStatusId });
+
+  if (stageInstanceError) {
+    console.error("submitTimesheet insert stage instance error:", describeError(stageInstanceError));
+    return { success: false, error: "Failed to create the first approval step." };
+  }
+
+  return { success: true, record: submission };
+}
+
+// ── Approvals ────────────────────────────────────────────────
+
+/**
+ * Load this user's approval queue: pending items awaiting their action at
+ * whichever stage their org role(s) participate in, plus history of items
+ * they've personally acted on before (approved or returned).
+ */
+export async function loadApprovalQueue() {
+  const userId = await getSessionUserId();
+  if (!userId) return [];
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: userOrgRoleRows } = await supabase
+    .from("wfk_m_userorgrole")
+    .select("role_id")
+    .eq("user_id", userId)
+    .eq("is_active", true);
+  const orgRoleIds = [...new Set((userOrgRoleRows || []).map((r) => r.role_id).filter(Boolean))];
+
+  const { data: participantRows } = orgRoleIds.length
+    ? await supabase
+      .from("wfk_m_stageparticipant")
+      .select("wfs_id")
+      .in("orgrole_id", orgRoleIds)
+      .eq("is_active", true)
+    : { data: [] };
+  const participantWfsIds = [...new Set((participantRows || []).map((r) => r.wfs_id).filter(Boolean))];
+
+  const orFilterParts = [`acted_by.eq.${userId}`];
+  if (participantWfsIds.length) {
+    orFilterParts.push(`and(wfs_id.in.(${participantWfsIds.join(",")}),acted_by.is.null)`);
+  }
+
+  const { data: stageInstances, error: siError } = await supabase
+    .from("wfk_t_stageinstance")
+    .select("*")
+    .or(orFilterParts.join(","))
+    .order("created_at", { ascending: false });
+
+  if (siError || !stageInstances?.length) return [];
+
+  const instanceIds = [...new Set(stageInstances.map((si) => si.instance_id).filter(Boolean))];
+  const wfsIds = [...new Set(stageInstances.map((si) => si.wfs_id).filter(Boolean))];
+
+  const [{ data: workflowInstances }, { data: stages }] = await Promise.all([
+    instanceIds.length
+      ? supabase.from("wfk_t_workflowinstance").select("*").in("instance_id", instanceIds).eq("app_id", TIME_TRACKER_APP_ID)
+      : { data: [] },
+    wfsIds.length
+      ? supabase.from("wfk_s_workflowstages").select("wfs_id, stage_name").in("wfs_id", wfsIds)
+      : { data: [] },
+  ]);
+
+  const instanceById = new Map((workflowInstances || []).map((wi) => [wi.instance_id, wi]));
+  const stageById = new Map((stages || []).map((s) => [s.wfs_id, s]));
+
+  const relevant = stageInstances.filter((si) => instanceById.has(si.instance_id));
+  if (!relevant.length) return [];
+
+  const documentIds = [...new Set(relevant.map((si) => instanceById.get(si.instance_id).document_id).filter(Boolean))];
+
+  const { data: submissions } = documentIds.length
+    ? await supabase.from("time_t_timesheetsubmissions").select("*").in("submission_id", documentIds)
+    : { data: [] };
+  const submissionById = new Map((submissions || []).map((s) => [s.submission_id, s]));
+
+  const requestorUserIds = [...new Set((submissions || []).map((s) => s.user_id).filter(Boolean))];
+  const { data: requestors } = requestorUserIds.length
+    ? await supabase.from("psb_s_user").select("user_id, first_name, last_name, username").in("user_id", requestorUserIds)
+    : { data: [] };
+  const requestorById = new Map(
+    (requestors || []).map((u) => [u.user_id, `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username]),
+  );
+
+  const workflowStatusIds = [...new Set((workflowInstances || []).map((wi) => wi.status_id).filter(Boolean))];
+  const { data: workflowStatuses } = workflowStatusIds.length
+    ? await supabase.from("wfk_s_status").select("status_id, status_name").in("status_id", workflowStatusIds)
+    : { data: [] };
+  const workflowStatusById = new Map((workflowStatuses || []).map((s) => [s.status_id, s.status_name]));
+
+  return relevant
+    .map((si) => {
+      const instance = instanceById.get(si.instance_id);
+      const submission = submissionById.get(instance?.document_id);
+      if (!submission) return null;
+
+      return {
+        stageinstance_id: si.stageinstance_id,
+        instance_id: si.instance_id,
+        submission_id: submission.submission_id,
+        requestor_name: requestorById.get(submission.user_id) || "Unknown",
+        week_start_date: submission.week_start_date,
+        week_end_date: submission.week_end_date,
+        total_hours: submission.total_hours,
+        remarks: submission.remarks,
+        stage_name: stageById.get(si.wfs_id)?.stage_name || "--",
+        workflow_status_name: workflowStatusById.get(instance?.status_id) || "--",
+        is_actionable: si.acted_by === null,
+        acted_at: si.acted_at,
+        comments: si.comments,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.is_actionable === b.is_actionable ? 0 : a.is_actionable ? -1 : 1));
+}
+
+/** Approve the given stage instance, advancing to the next stage or completing the request. */
+export async function approveTimesheetStage(stageinstanceId, comments) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: stageInstance, error: siError } = await supabase
+    .from("wfk_t_stageinstance")
+    .select("*")
+    .eq("stageinstance_id", stageinstanceId)
+    .maybeSingle();
+
+  if (siError || !stageInstance) return { success: false, error: "Approval step not found." };
+  if (stageInstance.acted_by) return { success: false, error: "This step has already been acted on." };
+
+  const { data: stageDef } = await supabase
+    .from("wfk_s_workflowstages")
+    .select("wfs_id, wf_id, stage_order")
+    .eq("wfs_id", stageInstance.wfs_id)
+    .maybeSingle();
+  if (!stageDef) return { success: false, error: "Workflow stage not found." };
+
+  const { data: participant } = await supabase
+    .from("wfk_m_stageparticipant")
+    .select("orgrole_id")
+    .eq("wfs_id", stageDef.wfs_id)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!participant) return { success: false, error: "No approver is configured for this stage." };
+
+  const { data: userOrgRole } = await supabase
+    .from("wfk_m_userorgrole")
+    .select("user_orgrole_id")
+    .eq("user_id", userId)
+    .eq("role_id", participant.orgrole_id)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!userOrgRole) return { success: false, error: "You are not authorized to approve this stage." };
+
+  const approvedStatusId = await getWorkflowStatusId(supabase, "Approved");
+  const pendingStatusId = await getWorkflowStatusId(supabase, WORKFLOW_STATUS_PENDING);
+  const now = new Date().toISOString();
+
+  const { error: updateSiError } = await supabase
+    .from("wfk_t_stageinstance")
+    .update({ status_id: approvedStatusId, acted_at: now, acted_by: userId, comments: comments || null })
+    .eq("stageinstance_id", stageinstanceId);
+  if (updateSiError) {
+    console.error("approveTimesheetStage update stage instance error:", describeError(updateSiError));
+    return { success: false, error: "Failed to record approval." };
+  }
+
+  const { data: nextStage } = await supabase
+    .from("wfk_s_workflowstages")
+    .select("wfs_id")
+    .eq("wf_id", stageDef.wf_id)
+    .eq("is_active", true)
+    .gt("stage_order", stageDef.stage_order)
+    .order("stage_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (nextStage) {
+    await supabase
+      .from("wfk_t_workflowinstance")
+      .update({ current_wfs_id: nextStage.wfs_id })
+      .eq("instance_id", stageInstance.instance_id);
+
+    const { error: insertNextError } = await supabase
+      .from("wfk_t_stageinstance")
+      .insert({ instance_id: stageInstance.instance_id, wfs_id: nextStage.wfs_id, status_id: pendingStatusId });
+    if (insertNextError) {
+      console.error("approveTimesheetStage insert next stage error:", describeError(insertNextError));
+      return { success: false, error: "Approved this step, but failed to advance to the next one." };
+    }
+  } else {
+    const { error: completeError } = await supabase
+      .from("wfk_t_workflowinstance")
+      .update({ status_id: approvedStatusId, completed_at: now })
+      .eq("instance_id", stageInstance.instance_id);
+    if (completeError) {
+      console.error("approveTimesheetStage complete instance error:", describeError(completeError));
+      return { success: false, error: "Approved this step, but failed to finalize the request." };
+    }
+  }
+
+  return { success: true };
+}
+
+/** Return the given stage instance to the requestor. Requires a comment. */
+export async function returnTimesheetStage(stageinstanceId, comments) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const trimmedComments = String(comments || "").trim();
+  if (!trimmedComments) return { success: false, error: "A comment is required when returning a timesheet." };
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: stageInstance, error: siError } = await supabase
+    .from("wfk_t_stageinstance")
+    .select("*")
+    .eq("stageinstance_id", stageinstanceId)
+    .maybeSingle();
+  if (siError || !stageInstance) return { success: false, error: "Approval step not found." };
+  if (stageInstance.acted_by) return { success: false, error: "This step has already been acted on." };
+
+  const { data: participant } = await supabase
+    .from("wfk_m_stageparticipant")
+    .select("orgrole_id")
+    .eq("wfs_id", stageInstance.wfs_id)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!participant) return { success: false, error: "No approver is configured for this stage." };
+
+  const { data: userOrgRole } = await supabase
+    .from("wfk_m_userorgrole")
+    .select("user_orgrole_id")
+    .eq("user_id", userId)
+    .eq("role_id", participant.orgrole_id)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!userOrgRole) return { success: false, error: "You are not authorized to act on this stage." };
+
+  const returnedStatusId = await getWorkflowStatusId(supabase, "Returned");
+  const now = new Date().toISOString();
+
+  const { error: updateSiError } = await supabase
+    .from("wfk_t_stageinstance")
+    .update({ status_id: returnedStatusId, acted_at: now, acted_by: userId, comments: trimmedComments })
+    .eq("stageinstance_id", stageinstanceId);
+  if (updateSiError) {
+    console.error("returnTimesheetStage update stage instance error:", describeError(updateSiError));
+    return { success: false, error: "Failed to record the return." };
+  }
+
+  const { error: updateInstanceError } = await supabase
+    .from("wfk_t_workflowinstance")
+    .update({ status_id: returnedStatusId })
+    .eq("instance_id", stageInstance.instance_id);
+  if (updateInstanceError) {
+    console.error("returnTimesheetStage update instance error:", describeError(updateInstanceError));
+    return { success: false, error: "Recorded the return, but failed to update the overall request status." };
+  }
+
+  return { success: true };
 }
 
 // `deleteAttendanceRecord`, `saveSchedule`, `updateConfig` are unrelated to

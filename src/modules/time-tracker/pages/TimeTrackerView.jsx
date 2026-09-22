@@ -40,18 +40,23 @@ import "../timeTracker.css";
 
 // Server actions for loading logs + clock in/clock out
 import {
+  approveTimesheetStage,
   clockIn as clockInAction,
   clockOut as clockOutAction,
+  loadApprovalQueue,
   loadCurrentUserHoursTarget,
   loadCurrentUserPermissionsData,
   loadEditReasons,
   loadEditReasonsAdmin,
   loadEmployeeHoursTargets,
   loadTimeTrackerData,
+  loadWeekSubmissionStatus,
+  returnTimesheetStage,
   saveEditReason,
   saveTimeLogEntry as saveTimeLogEntryAction,
   setEditReasonActive,
   setUserWeeklyHoursTarget,
+  submitTimesheet as submitTimesheetAction,
 } from "../data/timeTracker.actions";
 import { getTimeTrackerPermissions } from "../data/timeTracker.permissions";
 
@@ -178,6 +183,14 @@ function useLogsPage(initialData, permissions) {
   const [toggling, setToggling] = useState(false);
   const [weekLoading, setWeekLoading] = useState(false);
   const [weekLogs, setWeekLogs] = useState(initialData?.logs || []);
+  const [submissionStatus, setSubmissionStatus] = useState({
+    hasSubmission: false,
+    statusName: null,
+    submittedAt: null,
+    remarks: "",
+  });
+  const [remarks, setRemarks] = useState("");
+  const [submittingTimesheet, setSubmittingTimesheet] = useState(false);
 
   // Live clock tick
   useEffect(() => {
@@ -256,6 +269,27 @@ function useLogsPage(initialData, permissions) {
       cancelled = true;
     };
   }, [weekRange]);
+
+  // Submission status isn't part of initialData, so this fetches on every
+  // render including the first, not just on subsequent week changes.
+  useEffect(() => {
+    let cancelled = false;
+    loadWeekSubmissionStatus(toDateStr(weekRange.start))
+      .then((data) => {
+        if (cancelled) return;
+        setSubmissionStatus(data);
+        setRemarks(data.remarks || "");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [weekRange]);
+
+  const isSubmissionLocked = useMemo(() => {
+    const name = String(submissionStatus.statusName || "").toLowerCase();
+    return submissionStatus.hasSubmission && (name === "pending" || name === "approved");
+  }, [submissionStatus]);
 
   // Map the current week's logs onto the seven day rows for the table.
   const weekRows = useMemo(() => {
@@ -397,6 +431,37 @@ function useLogsPage(initialData, permissions) {
     return result;
   }, []);
 
+  const handleSubmitTimesheet = useCallback(async () => {
+    if (submittingTimesheet || isSubmissionLocked) return;
+    if (!permissions.isRequestor) {
+      toastWarning(
+        'You need the "Timesheet Requestor - VA" org role to submit a timesheet.',
+        "Submit Timesheet",
+      );
+      return;
+    }
+    setSubmittingTimesheet(true);
+    try {
+      const result = await submitTimesheetAction({
+        weekStartDate: toDateStr(weekRange.start),
+        weekEndDate: toDateStr(weekRange.end),
+        remarks,
+      });
+      if (result.success) {
+        toastSuccess("Timesheet submitted for approval.", "Time Tracker");
+        const refreshed = await loadWeekSubmissionStatus(toDateStr(weekRange.start));
+        setSubmissionStatus(refreshed);
+      } else {
+        toastError(result.error || "Failed to submit timesheet.", "Time Tracker");
+      }
+    } catch (err) {
+      console.error("submitTimesheet failed:", err);
+      toastError("Something went wrong. Please try again.", "Time Tracker");
+    } finally {
+      setSubmittingTimesheet(false);
+    }
+  }, [submittingTimesheet, isSubmissionLocked, permissions.isRequestor, weekRange, remarks]);
+
   return {
     currentTime,
     activeNav,
@@ -419,6 +484,12 @@ function useLogsPage(initialData, permissions) {
     handleClockToggle,
     handleSaveEdit,
     toggling,
+    submissionStatus,
+    remarks,
+    setRemarks,
+    isSubmissionLocked,
+    submittingTimesheet,
+    handleSubmitTimesheet,
   };
 }
 
@@ -702,8 +773,32 @@ function SummaryCard({ icon, iconClass, label, sub, value, valueClass }) {
   );
 }
 
-function TimesheetSummary({ weekRange, totalHours, regularHours, overtimeHours, weeklyHoursTarget, workedDays }) {
+function TimesheetSummary({
+  weekRange,
+  totalHours,
+  regularHours,
+  overtimeHours,
+  weeklyHoursTarget,
+  workedDays,
+  submissionStatus,
+  remarks,
+  onRemarksChange,
+  isRequestor,
+  isSubmissionLocked,
+  submitting,
+  onSubmit,
+}) {
   const periodLabel = `${weekRange.start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${weekRange.end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+
+  const statusLower = String(submissionStatus.statusName || "").toLowerCase();
+  const pillLabel = !submissionStatus.hasSubmission ? "Not Submitted" : submissionStatus.statusName || "Submitted";
+  const canResubmit = submissionStatus.hasSubmission && (statusLower === "returned" || statusLower === "rejected");
+  const submitDisabled = submitting || !isRequestor || isSubmissionLocked;
+  const submitLabel = submitting
+    ? "Submitting..."
+    : canResubmit
+      ? "Resubmit Timesheet for Approval"
+      : "Submit Timesheet for Approval";
 
   return (
     <aside
@@ -714,7 +809,7 @@ function TimesheetSummary({ weekRange, totalHours, regularHours, overtimeHours, 
         <h3 className="tt-summary-title">Timesheet Summary</h3>
         <span className="tt-summary-status-pill">
           <span className="tt-summary-status-dot" aria-hidden="true" />
-          Not Submitted
+          {pillLabel}
         </span>
       </div>
 
@@ -758,19 +853,21 @@ function TimesheetSummary({ weekRange, totalHours, regularHours, overtimeHours, 
           <div className="tt-summary-state-card">
             <div className="tt-summary-state-row">
               <span className="tt-summary-state-label">Submission State:</span>
-              <span className="tt-summary-state-pill">Pending Submission</span>
+              <span className="tt-summary-state-pill">{pillLabel}</span>
             </div>
             <div className="tt-summary-approver">
               <span className="tt-summary-approver-avatar" aria-hidden="true">
-                —
+                {submissionStatus.approverName ? submissionStatus.approverName.charAt(0).toUpperCase() : "—"}
               </span>
               <div className="tt-summary-approver-text">
                 <div className="tt-summary-approver-label">
                   Assigned Approver:
                 </div>
-                <div className="tt-summary-approver-name">Unassigned</div>
+                <div className="tt-summary-approver-name">
+                  {submissionStatus.approverName || "Unassigned"}
+                </div>
                 <div className="tt-summary-approver-role">
-                  No approver assigned yet
+                  {submissionStatus.approverRoleName || "No approver assigned yet"}
                 </div>
               </div>
             </div>
@@ -790,6 +887,9 @@ function TimesheetSummary({ weekRange, totalHours, regularHours, overtimeHours, 
             className="tt-summary-remarks"
             rows="3"
             placeholder="e.g., Worked on sprint onboarding and core API integration."
+            value={remarks}
+            onChange={(event) => onRemarksChange(event.target.value)}
+            disabled={isSubmissionLocked || submitting}
           />
           <p className="tt-summary-remarks-hint">
             Optional notes for your manager before final submission.
@@ -800,10 +900,16 @@ function TimesheetSummary({ weekRange, totalHours, regularHours, overtimeHours, 
           <button
             type="button"
             className="tt-btn-submit tt-panel-submit"
-            disabled
+            disabled={submitDisabled}
+            onClick={onSubmit}
           >
-            Submit Timesheet for Approval
+            {submitLabel}
           </button>
+          {!isRequestor && (
+            <p className="tt-summary-warning">
+              Requires the &quot;Timesheet Requestor - VA&quot; role to submit.
+            </p>
+          )}
         </div>
       </div>
     </aside>
@@ -1255,6 +1361,202 @@ function EditReasonsSection() {
   );
 }
 
+// ─── Approvals ──────────────────────────────────────────────────
+
+function ApprovalActionModal({ mode, row, onClose, onSubmit }) {
+  const [comments, setComments] = useState("");
+  const [saving, setSaving] = useState(false);
+  const isReturn = mode === "return";
+  const canSubmit = !saving && (!isReturn || comments.trim().length > 0);
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    setSaving(true);
+    try {
+      await onSubmit(comments);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      show
+      onHide={onClose}
+      title={isReturn ? "Return Timesheet" : "Approve Timesheet"}
+      footer={(
+        <>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant={isReturn ? "danger" : "primary"}
+            onClick={handleSubmit}
+            loading={saving}
+            disabled={!canSubmit}
+          >
+            {isReturn ? "Return" : "Approve"}
+          </Button>
+        </>
+      )}
+    >
+      <p className="mb-2">
+        {row.requestor_name}&apos;s timesheet for {row.week_start_date} – {row.week_end_date}
+      </p>
+      <label className="tt-modal-field">
+        <span className="tt-modal-label">{isReturn ? "Reason for return" : "Comment (optional)"}</span>
+        <textarea
+          className="tt-modal-textarea"
+          rows="3"
+          value={comments}
+          onChange={(event) => setComments(event.target.value)}
+          placeholder={isReturn ? "Explain what needs to be corrected..." : "Optional comment..."}
+        />
+      </label>
+    </Modal>
+  );
+}
+
+function ApprovalsPage() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [actionModal, setActionModal] = useState(null); // null | { mode, row }
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    loadApprovalQueue()
+      .then((data) => setRows(data))
+      .catch(() => toastError("Unable to load approvals.", "Approvals"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadApprovalQueue()
+      .then((data) => {
+        if (!cancelled) setRows(data);
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load approvals.", "Approvals");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const columns = useMemo(
+    () => [
+      { key: "requestor_name", label: "Employee", minWidth: 180 },
+      {
+        key: "week_start_date",
+        label: "Week",
+        minWidth: 200,
+        render: (row) => `${row.week_start_date} – ${row.week_end_date}`,
+      },
+      {
+        key: "total_hours",
+        label: "Hours",
+        minWidth: 90,
+        align: "center",
+        render: (row) => Number(row.total_hours || 0).toFixed(2),
+      },
+      { key: "stage_name", label: "Stage", minWidth: 160 },
+      {
+        key: "workflow_status_name",
+        label: "Status",
+        minWidth: 130,
+        render: (row) => (
+          <StatusBadge status={String(row.workflow_status_name || "").toLowerCase()} label={row.workflow_status_name} />
+        ),
+      },
+      {
+        key: "remarks",
+        label: "Remarks",
+        minWidth: 200,
+        render: (row) => row.remarks || "--",
+      },
+    ],
+    [],
+  );
+
+  const handleAction = useCallback(
+    async (comments) => {
+      const { mode, row } = actionModal;
+      const result = mode === "approve"
+        ? await approveTimesheetStage(row.stageinstance_id, comments)
+        : await returnTimesheetStage(row.stageinstance_id, comments);
+
+      if (result.success) {
+        toastSuccess(mode === "approve" ? "Timesheet approved." : "Timesheet returned.", "Approvals");
+        setActionModal(null);
+        reload();
+      } else {
+        toastError(result.error || "Failed to process action.", "Approvals");
+      }
+    },
+    [actionModal, reload],
+  );
+
+  const actions = useMemo(
+    () => [
+      {
+        key: "approve",
+        label: "Approve",
+        icon: "check",
+        visible: (row) => row.is_actionable,
+        onClick: (row) => setActionModal({ mode: "approve", row }),
+      },
+      {
+        key: "return",
+        label: "Return",
+        icon: "ban",
+        type: "danger",
+        visible: (row) => row.is_actionable,
+        onClick: (row) => setActionModal({ mode: "return", row }),
+      },
+    ],
+    [],
+  );
+
+  return (
+    <div className="tt-setup-page-body">
+      <div className="tt-page-header">
+        <div className="tt-page-header-text">
+          <h1 className="tt-page-title">Approvals</h1>
+          <p className="tt-page-subtitle">Approve or return submitted timesheets.</p>
+        </div>
+      </div>
+
+      <div className="tt-setup-content-scroll">
+        <TableZ
+          data={rows}
+          columns={columns}
+          rowIdKey="stageinstance_id"
+          actions={actions}
+          loading={loading}
+          loadingMessage="Loading approvals..."
+          emptyMessage="No timesheets pending your approval."
+          hideSearch
+          hideFooter
+        />
+      </div>
+
+      {actionModal && (
+        <ApprovalActionModal
+          mode={actionModal.mode}
+          row={actionModal.row}
+          onClose={() => setActionModal(null)}
+          onSubmit={handleAction}
+        />
+      )}
+    </div>
+  );
+}
+
 function AdminSetupPage() {
   const [subTab, setSubTab] = useState("hours");
 
@@ -1324,6 +1626,12 @@ export default function TimeTrackerView({ initialData }) {
     handleClockToggle,
     handleSaveEdit,
     toggling,
+    submissionStatus,
+    remarks,
+    setRemarks,
+    isSubmissionLocked,
+    submittingTimesheet,
+    handleSubmitTimesheet,
   } = useLogsPage(initialData, permissions);
 
   // Keep sidebar tab visibility in sync with role changes made elsewhere
@@ -1397,16 +1705,7 @@ export default function TimeTrackerView({ initialData }) {
           </div>
         )}
 
-        {activeNav === "approvals" && (
-          <div className="tt-page-header">
-            <div className="tt-page-header-text">
-              <h1 className="tt-page-title">Approvals</h1>
-              <p className="tt-page-subtitle">
-                Approve or return submitted timesheets. Coming soon.
-              </p>
-            </div>
-          </div>
-        )}
+        {activeNav === "approvals" && <ApprovalsPage />}
 
         {activeNav === "setup" && <AdminSetupPage />}
       </main>
@@ -1419,6 +1718,13 @@ export default function TimeTrackerView({ initialData }) {
           overtimeHours={overtimeHours}
           weeklyHoursTarget={weeklyHoursTarget}
           workedDays={workedDays}
+          submissionStatus={submissionStatus}
+          remarks={remarks}
+          onRemarksChange={setRemarks}
+          isRequestor={permissions.isRequestor}
+          isSubmissionLocked={isSubmissionLocked}
+          submitting={submittingTimesheet}
+          onSubmit={handleSubmitTimesheet}
         />
       )}
 

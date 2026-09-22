@@ -17,14 +17,17 @@ export function getTimeTrackerPermissions(roles, orgRoles) {
 
   const isEmployee = appRoleNames.has("employee");
   const isAdmin = appRoleNames.has("admin");
-  const isApprover = (Array.isArray(orgRoles) ? orgRoles : []).some(
-    (role) => normalizeName(role?.name) === "timesheet approver",
+  const orgRoleNames = new Set(
+    (Array.isArray(orgRoles) ? orgRoles : []).map((role) => normalizeName(role?.name)),
   );
+  const isApprover = orgRoleNames.has(normalizeName("Timesheet Approver - VA"));
+  const isRequestor = orgRoleNames.has(normalizeName("Timesheet Requestor - VA"));
 
   return {
     isEmployee,
     isAdmin,
     isApprover,
+    isRequestor,
     canViewLogsTab: isEmployee || isAdmin,
     canViewTimesheetsTab: isAdmin,
     canViewApprovalsTab: isApprover,
