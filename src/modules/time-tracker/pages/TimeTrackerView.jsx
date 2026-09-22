@@ -50,6 +50,7 @@ import {
   loadEditReasons,
   loadEditReasonsAdmin,
   loadEmployeeHoursTargets,
+  loadTimesheetsForWeek,
   loadTimeTrackerData,
   loadWeekSubmissionStatus,
   returnTimesheetStage,
@@ -1705,6 +1706,294 @@ function ApprovalsPage() {
   );
 }
 
+function TimesheetsPage() {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [employees, setEmployees] = useState([]);
+  const [loadingEmployees, setLoadingEmployees] = useState(true);
+  const [selectedUserIds, setSelectedUserIds] = useState(() => new Set());
+  const [employeeDetails, setEmployeeDetails] = useState({});
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+
+  const weekRange = useMemo(() => {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const formatDate = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return {
+      start: monday,
+      end: sunday,
+      fullLabel: `Timesheets for ${formatDate(monday)} - ${formatDate(sunday)}`,
+    };
+  }, [weekOffset]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadTimesheetsForWeek(toDateStr(weekRange.start))
+      .then((data) => {
+        if (!cancelled) setEmployees(data);
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load timesheets.", "Timesheets");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingEmployees(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [weekRange]);
+
+  // Fetch detail (logs + target hours) for any newly-selected employee.
+  useEffect(() => {
+    selectedUserIds.forEach((userId) => {
+      if (employeeDetails[userId]) return;
+      const employee = employees.find((e) => e.user_id === userId);
+      if (!employee) return;
+      loadSubmissionLogs(employee.submission_id).then((data) => {
+        const logs = data.logs || [];
+        const totalHoursRendered = logs.reduce((sum, log) => sum + (Number(log.total_hours) || 0), 0);
+        setEmployeeDetails((prev) => ({
+          ...prev,
+          [userId]: { logs, weeklyHoursTarget: Number(data.weeklyHoursTarget) || 40, totalHoursRendered },
+        }));
+      });
+    });
+  }, [selectedUserIds, employees, employeeDetails]);
+
+  const toggleEmployee = useCallback((userId) => {
+    setSelectedUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedUserIds((prev) =>
+      prev.size === employees.length ? new Set() : new Set(employees.map((e) => e.user_id)),
+    );
+  }, [employees]);
+
+  const goPreviousWeek = useCallback(() => {
+    setLoadingEmployees(true);
+    setSelectedUserIds(new Set());
+    setEmployeeDetails({});
+    setWeekOffset((prev) => prev - 1);
+  }, []);
+  const goNextWeek = useCallback(() => {
+    setLoadingEmployees(true);
+    setSelectedUserIds(new Set());
+    setEmployeeDetails({});
+    setWeekOffset((prev) => prev + 1);
+  }, []);
+  const goThisWeek = useCallback(() => {
+    setLoadingEmployees(true);
+    setSelectedUserIds(new Set());
+    setEmployeeDetails({});
+    setWeekOffset(0);
+  }, []);
+
+  const handlePrintPdf = async () => {
+    if (selectedUserIds.size === 0) return;
+    setGeneratingPdf(true);
+    try {
+      const { default: jsPDF } = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const autoTable = autoTableModule.default;
+
+      const doc = new jsPDF({ unit: "pt", format: "letter" });
+      let cursorY = 40;
+      const pageHeight = doc.internal.pageSize.getHeight();
+
+      Array.from(selectedUserIds).forEach((userId) => {
+        const detail = employeeDetails[userId];
+        const employee = employees.find((e) => e.user_id === userId);
+        if (!detail || !employee) return;
+
+        if (cursorY > pageHeight - 100) {
+          doc.addPage();
+          cursorY = 40;
+        }
+
+        doc.setFontSize(14);
+        doc.text(employee.name, 40, cursorY);
+        cursorY += 18;
+
+        doc.setFontSize(10);
+        doc.text(weekRange.fullLabel, 40, cursorY);
+        cursorY += 14;
+        doc.text(
+          `Target Hours: ${detail.weeklyHoursTarget.toFixed(2)}   Total Hours: ${detail.totalHoursRendered.toFixed(2)}`,
+          40,
+          cursorY,
+        );
+        cursorY += 10;
+
+        autoTable(doc, {
+          startY: cursorY,
+          head: [["Date", "Clocked In", "Clocked Out", "Hours"]],
+          body: detail.logs.map((log) => [
+            log.clock_in_date,
+            log.clock_in_time ? `${log.clock_in_date} ${log.clock_in_time}` : "--",
+            log.clock_out_time ? `${log.clock_out_date} ${log.clock_out_time}` : "--",
+            log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--",
+          ]),
+          margin: { left: 40, right: 40 },
+          styles: { fontSize: 9 },
+        });
+
+        cursorY = doc.lastAutoTable.finalY + 24;
+
+        if (employee.remarks) {
+          doc.setFontSize(9);
+          doc.text(`Remarks: ${employee.remarks}`, 40, cursorY);
+          cursorY += 20;
+        }
+
+        cursorY += 16;
+      });
+
+      doc.save(`timesheets-${toDateStr(weekRange.start)}.pdf`);
+    } catch (err) {
+      console.error("Timesheet PDF generation failed:", err);
+      toastError("Failed to generate PDF.", "Timesheets");
+    } finally {
+      setGeneratingPdf(false);
+    }
+  };
+
+  return (
+    <div className="tt-setup-page-body">
+      <div className="tt-table-header">
+        <div className="tt-table-header-left">
+          <button type="button" onClick={goPreviousWeek} className="tt-nav-arrow" aria-label="Previous week">
+            <FontAwesomeIcon icon={faChevronLeft} />
+          </button>
+          <button type="button" onClick={goNextWeek} className="tt-nav-arrow" aria-label="Next week">
+            <FontAwesomeIcon icon={faChevronRight} />
+          </button>
+          <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
+        </div>
+        <div className="tt-table-header-right">
+          <button type="button" onClick={goThisWeek} className="tt-pill-week">
+            This Week
+          </button>
+          <Button
+            type="button"
+            variant="primary"
+            onClick={handlePrintPdf}
+            loading={generatingPdf}
+            disabled={selectedUserIds.size === 0}
+          >
+            <FontAwesomeIcon icon={faDownload} /> Print PDF
+          </Button>
+        </div>
+      </div>
+
+      <div className="tt-timesheets-layout">
+        <aside className="tt-timesheets-employee-list">
+          {employees.length > 0 && (
+            <label className="tt-timesheets-employee-item tt-timesheets-select-all">
+              <input
+                type="checkbox"
+                checked={selectedUserIds.size === employees.length}
+                onChange={toggleSelectAll}
+              />
+              <span>Select All</span>
+            </label>
+          )}
+
+          {loadingEmployees ? (
+            <p className="tt-timesheets-empty">Loading employees...</p>
+          ) : employees.length === 0 ? (
+            <p className="tt-timesheets-empty">No timesheets submitted for this week.</p>
+          ) : (
+            employees.map((employee) => (
+              <label key={employee.user_id} className="tt-timesheets-employee-item">
+                <input
+                  type="checkbox"
+                  checked={selectedUserIds.has(employee.user_id)}
+                  onChange={() => toggleEmployee(employee.user_id)}
+                />
+                <span>{employee.name}</span>
+                <StatusBadge status={String(employee.status_name || "").toLowerCase()} label={employee.status_name} />
+              </label>
+            ))
+          )}
+        </aside>
+
+        <div className="tt-timesheets-detail-pane">
+          {selectedUserIds.size === 0 ? (
+            <p className="tt-timesheets-empty">Select one or more employees to view their timesheet.</p>
+          ) : (
+            Array.from(selectedUserIds).map((userId) => {
+              const employee = employees.find((e) => e.user_id === userId);
+              const detail = employeeDetails[userId];
+              if (!employee) return null;
+
+              return (
+                <div key={userId} className="tt-approval-detail">
+                  <h4>{employee.name}</h4>
+                  {!detail ? (
+                    <div className="tt-approval-detail-loading">Loading...</div>
+                  ) : (
+                    <>
+                      <table className="tt-approval-detail-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Clocked In</th>
+                            <th>Clocked Out</th>
+                            <th>Hours</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.logs.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="tt-approval-detail-empty">
+                                No logs recorded for this week.
+                              </td>
+                            </tr>
+                          ) : (
+                            detail.logs.map((log) => (
+                              <tr key={log.log_id}>
+                                <td>{log.clock_in_date}</td>
+                                <td>{log.clock_in_time ? `${log.clock_in_date} ${log.clock_in_time}` : "--"}</td>
+                                <td>{log.clock_out_time ? `${log.clock_out_date} ${log.clock_out_time}` : "--"}</td>
+                                <td>{log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--"}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                      <div className="tt-approval-detail-summary">
+                        <span>
+                          <strong>Total Hours:</strong> {detail.totalHoursRendered.toFixed(2)} hrs
+                        </span>
+                        <span>
+                          <strong>Target Hours:</strong> {detail.weeklyHoursTarget.toFixed(2)} hrs
+                        </span>
+                      </div>
+                      <div className="tt-approval-detail-remarks">
+                        <span className="tt-approval-detail-remarks-label">Remarks / Notes:</span>
+                        <p className="tt-approval-detail-remarks-text">{employee.remarks || "No remarks provided."}</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminSetupPage() {
   const [subTab, setSubTab] = useState("hours");
 
@@ -1842,16 +2131,7 @@ export default function TimeTrackerView({ initialData }) {
           </>
         )}
 
-        {activeNav === "timesheets" && (
-          <div className="tt-page-header">
-            <div className="tt-page-header-text">
-              <h1 className="tt-page-title">Timesheets</h1>
-              <p className="tt-page-subtitle">
-                View, edit, and print employee timesheets. Coming soon.
-              </p>
-            </div>
-          </div>
-        )}
+        {activeNav === "timesheets" && <TimesheetsPage />}
 
         {activeNav === "approvals" && <ApprovalsPage />}
 

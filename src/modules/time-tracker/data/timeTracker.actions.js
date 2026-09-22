@@ -1017,6 +1017,68 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
   return { success: true, record: submission };
 }
 
+// ── Timesheets (Admin) ──────────────────────────────────────
+
+/** List every employee who submitted a timesheet for the given week, Admin-only. */
+export async function loadTimesheetsForWeek(weekStartDate) {
+  const userId = await getSessionUserId();
+  if (!userId) return [];
+
+  const supabase = getSupabaseAdmin();
+
+  const { roles } = await loadTimeTrackerRoles(supabase, userId);
+  const isAdmin = roles.some(
+    (r) => String(r?.role_name || "").trim().toLowerCase() === "admin" && r.is_active !== false,
+  );
+  if (!isAdmin) return [];
+
+  const { data: submissions, error } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("submission_id, user_id, total_hours, remarks")
+    .eq("week_start_date", weekStartDate)
+    .order("user_id", { ascending: true });
+
+  if (error) {
+    console.error("loadTimesheetsForWeek error:", describeError(error));
+    return [];
+  }
+  if (!submissions?.length) return [];
+
+  const userIds = [...new Set(submissions.map((s) => s.user_id))];
+  const { data: users } = await supabase
+    .from("psb_s_user")
+    .select("user_id, first_name, last_name, username")
+    .in("user_id", userIds);
+  const userById = new Map((users || []).map((u) => [u.user_id, u]));
+
+  const submissionIds = submissions.map((s) => s.submission_id);
+  const { data: instances } = await supabase
+    .from("wfk_t_workflowinstance")
+    .select("document_id, status_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .in("document_id", submissionIds);
+  const statusIdByDoc = new Map((instances || []).map((i) => [i.document_id, i.status_id]));
+  const statusIds = [...new Set((instances || []).map((i) => i.status_id).filter(Boolean))];
+  const { data: statuses } = statusIds.length
+    ? await supabase.from("wfk_s_status").select("status_id, status_name").in("status_id", statusIds)
+    : { data: [] };
+  const statusNameById = new Map((statuses || []).map((s) => [s.status_id, s.status_name]));
+
+  return submissions.map((s) => {
+    const user = userById.get(s.user_id);
+    const name = user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username : "Unknown";
+    const statusId = statusIdByDoc.get(s.submission_id);
+    return {
+      submission_id: s.submission_id,
+      user_id: s.user_id,
+      name,
+      total_hours: s.total_hours,
+      remarks: s.remarks,
+      status_name: statusNameById.get(statusId) || "--",
+    };
+  });
+}
+
 // ── Approvals ────────────────────────────────────────────────
 
 /**
