@@ -1629,9 +1629,18 @@ function ApprovalsPage() {
     [],
   );
 
-  const goPreviousWeek = useCallback(() => setWeekOffset((prev) => prev - 1), []);
-  const goNextWeek = useCallback(() => setWeekOffset((prev) => prev + 1), []);
-  const goThisWeek = useCallback(() => setWeekOffset(0), []);
+  const goPreviousWeek = useCallback(() => {
+    setLoading(true);
+    setWeekOffset((prev) => prev - 1);
+  }, []);
+  const goNextWeek = useCallback(() => {
+    setLoading(true);
+    setWeekOffset((prev) => prev + 1);
+  }, []);
+  const goThisWeek = useCallback(() => {
+    setLoading(true);
+    setWeekOffset(0);
+  }, []);
 
   return (
     <div className="tt-setup-page-body">
