@@ -774,17 +774,15 @@ function TimeLogTable({
             />
           </div>
         </div>
-        <div className="tt-table-header-right">
-          <button
-            type="button"
-            className="tt-pill-week"
-            onClick={onThisWeek}
-            disabled={weekOffset === 0}
-          >
-            This Week
-          </button>
-          <LogsToolbar />
-        </div>
+        <button
+          type="button"
+          className="tt-pill-week"
+          onClick={onThisWeek}
+          disabled={weekOffset === 0}
+        >
+          This Week
+        </button>
+        <LogsToolbar />
       </div>
 
       <TableZ
