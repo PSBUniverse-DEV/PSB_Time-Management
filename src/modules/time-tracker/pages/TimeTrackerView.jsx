@@ -1668,7 +1668,6 @@ function ApprovalsPage() {
         key: "return",
         label: "Return",
         icon: "ban",
-        type: "danger",
         visible: (row) => row.is_actionable,
         onClick: (row) => setActionModal({ mode: "return", row }),
       },
