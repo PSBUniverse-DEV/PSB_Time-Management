@@ -1868,9 +1868,9 @@ function TimesheetsPage() {
           startY: cursorY,
           head: [["Date", "Clocked In", "Clocked Out", "Hours"]],
           body: detail.logs.map((log) => [
-            log.clock_in_date,
-            log.clock_in_time ? `${log.clock_in_date} ${log.clock_in_time}` : "--",
-            log.clock_out_time ? `${log.clock_out_date} ${log.clock_out_time}` : "--",
+            formatSheetDate(log.clock_in_date),
+            log.clock_in_time ? formatSheetDateTime(log.clock_in_date, log.clock_in_time) : "--",
+            log.clock_out_time ? formatSheetDateTime(log.clock_out_date, log.clock_out_time) : "--",
             log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--",
           ]),
           margin: { left: 40, right: 40 },
