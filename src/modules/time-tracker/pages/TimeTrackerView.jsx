@@ -1910,9 +1910,9 @@ function TimesheetsPage() {
           <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
         </div>
         <div className="tt-table-header-right">
-          <button type="button" onClick={goThisWeek} className="tt-pill-week">
+          <Button type="button" variant="secondary" onClick={goThisWeek}>
             This Week
-          </button>
+          </Button>
           <Button
             type="button"
             variant="primary"
