@@ -1148,7 +1148,15 @@
   border-color: #dce3ed;
 }
 
+.tt-table-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .tt-pill-week {
+  display: inline-flex;
+  align-items: center;
   padding: 0.45rem 0.75rem;
   border: 1px solid var(--tt-spruce-200);
   border-radius: 8px;
@@ -1161,9 +1169,12 @@
 }
 
 .tt-btn-export {
-  padding: 0.5rem 0.9rem;
-  border: 2px solid var(--tt-spruce-800);
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--tt-spruce-800);
+  border-radius: 8px;
   background: #ffffff;
   color: var(--tt-spruce-800);
   font-size: 14px;
