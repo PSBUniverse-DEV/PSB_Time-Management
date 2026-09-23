@@ -1089,10 +1089,7 @@ export async function loadTimesheetsForWeek(weekStartDate) {
 
   const supabase = getSupabaseAdmin();
 
-  const { roles } = await loadTimeTrackerRoles(supabase, userId);
-  const isAdmin = roles.some(
-    (r) => String(r?.role_name || "").trim().toLowerCase() === "admin" && r.is_active !== false,
-  );
+  const isAdmin = await checkIsTimeTrackerAdmin(supabase, userId);
   if (!isAdmin) return [];
 
   const { data: submissions, error } = await supabase
@@ -1108,18 +1105,18 @@ export async function loadTimesheetsForWeek(weekStartDate) {
   if (!submissions?.length) return [];
 
   const userIds = [...new Set(submissions.map((s) => s.user_id))];
-  const { data: users } = await supabase
-    .from("psb_s_user")
-    .select("user_id, first_name, last_name, username")
-    .in("user_id", userIds);
+  const submissionIds = submissions.map((s) => s.submission_id);
+
+  const [{ data: users }, { data: instances }] = await Promise.all([
+    supabase.from("psb_s_user").select("user_id, first_name, last_name, username").in("user_id", userIds),
+    supabase
+      .from("wfk_t_workflowinstance")
+      .select("document_id, status_id")
+      .eq("app_id", TIME_TRACKER_APP_ID)
+      .in("document_id", submissionIds),
+  ]);
   const userById = new Map((users || []).map((u) => [u.user_id, u]));
 
-  const submissionIds = submissions.map((s) => s.submission_id);
-  const { data: instances } = await supabase
-    .from("wfk_t_workflowinstance")
-    .select("document_id, status_id")
-    .eq("app_id", TIME_TRACKER_APP_ID)
-    .in("document_id", submissionIds);
   const statusIdByDoc = new Map((instances || []).map((i) => [i.document_id, i.status_id]));
   const statusIds = [...new Set((instances || []).map((i) => i.status_id).filter(Boolean))];
   const { data: statuses } = statusIds.length
@@ -1146,11 +1143,6 @@ export async function loadTimesheetsForWeek(weekStartDate) {
 
 // ── Approvals ────────────────────────────────────────────────
 
-/**
- * Read-only daily logs for a submitted timesheet, for the Approvals detail
- * row. Authorized only for the submission's own owner, an approver on any
- * stage of its workflow, or an Admin — not just anyone who guesses an id.
- */
 /**
  * The wfk_* authorization chain — read-only, unchanged logic, just extracted
  * for reuse/parallelizing.
@@ -1210,6 +1202,11 @@ async function checkIsTimeTrackerAdmin(supabase, userId) {
   return (roles || []).some((r) => String(r.role_name || "").trim().toLowerCase() === "admin");
 }
 
+/**
+ * Read-only daily logs for a submitted timesheet, for the Approvals detail
+ * row. Authorized only for the submission's own owner, an approver on any
+ * stage of its workflow, or an Admin — not just anyone who guesses an id.
+ */
 export async function loadSubmissionLogs(submissionId) {
   const userId = await getSessionUserId();
   if (!userId) return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
