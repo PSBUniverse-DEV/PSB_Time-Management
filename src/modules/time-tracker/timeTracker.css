@@ -2156,6 +2156,43 @@
   margin: 0;
 }
 
+.tt-summary-action-comment {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background: #f8fbfb;
+  border: 1px solid #e1ebec;
+}
+
+.tt-summary-action-comment.is-returned {
+  background: #fff8ec;
+  border-color: #f5d9a8;
+}
+
+.tt-summary-action-comment-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #b45309;
+}
+
+.tt-summary-action-comment.is-returned .tt-summary-action-comment-label {
+  color: #b45309;
+}
+
+.tt-summary-action-comment-text {
+  margin: 0.25rem 0;
+  font-size: 13px;
+  color: #16383e;
+}
+
+.tt-summary-action-comment-by {
+  font-size: 11px;
+  color: #64748b;
+}
+
 .tt-timesheets-select-all {
   border-bottom: 1px solid #e1ebec;
   font-weight: 600;

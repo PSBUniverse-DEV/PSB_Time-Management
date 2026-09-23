@@ -740,6 +740,7 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     return {
       hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
       approverName: null, approverRoleName: null,
+      lastActionComment: null, lastActionByName: null,
     };
   }
 
@@ -756,12 +757,13 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     return {
       hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
       approverName: null, approverRoleName: null,
+      lastActionComment: null, lastActionByName: null,
     };
   }
 
   const { data: instance } = await supabase
     .from("wfk_t_workflowinstance")
-    .select("status_id, current_wfs_id")
+    .select("instance_id, status_id, current_wfs_id")
     .eq("app_id", TIME_TRACKER_APP_ID)
     .eq("document_id", submission.submission_id)
     .maybeSingle();
@@ -821,6 +823,36 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     }
   }
 
+  let lastActionComment = null;
+  let lastActionByName = null;
+
+  if (instance?.instance_id) {
+    const { data: lastActedStage } = await supabase
+      .from("wfk_t_stageinstance")
+      .select("comments, acted_by, acted_at")
+      .eq("instance_id", instance.instance_id)
+      .not("acted_at", "is", null)
+      .order("acted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastActedStage?.comments) {
+      lastActionComment = lastActedStage.comments;
+
+      if (lastActedStage.acted_by) {
+        const { data: actor } = await supabase
+          .from("psb_s_user")
+          .select("first_name, last_name, username")
+          .eq("user_id", lastActedStage.acted_by)
+          .maybeSingle();
+
+        lastActionByName = actor
+          ? `${actor.first_name || ""} ${actor.last_name || ""}`.trim() || actor.username
+          : null;
+      }
+    }
+  }
+
   return {
     hasSubmission: true,
     statusName,
@@ -828,6 +860,8 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     remarks: submission.remarks || "",
     approverName,
     approverRoleName,
+    lastActionComment,
+    lastActionByName,
   };
 }
 

@@ -919,6 +919,18 @@ function TimesheetSummary({
                 </div>
               </div>
             </div>
+
+            {submissionStatus.lastActionComment && (
+              <div className={`tt-summary-action-comment${statusLower === "returned" ? " is-returned" : ""}`}>
+                <span className="tt-summary-action-comment-label">
+                  {statusLower === "returned" ? "Reason for Return" : "Approver's Comment"}
+                </span>
+                <p className="tt-summary-action-comment-text">{submissionStatus.lastActionComment}</p>
+                {submissionStatus.lastActionByName && (
+                  <span className="tt-summary-action-comment-by">— {submissionStatus.lastActionByName}</span>
+                )}
+              </div>
+            )}
           </div>
         </section>
 
