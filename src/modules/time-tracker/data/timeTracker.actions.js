@@ -1039,13 +1039,42 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
     instanceId = data.instance_id;
   }
 
-  const { error: stageInstanceError } = await supabase
+  // Exactly one stage instance row per document, forever — reset it in
+  // place on every (re)submit instead of inserting a new one.
+  const { data: existingStageInstance } = await supabase
     .from("wfk_t_stageinstance")
-    .insert({ instance_id: instanceId, wfs_id: firstStage.wfs_id, status_id: pendingStatusId });
+    .select("stageinstance_id")
+    .eq("instance_id", instanceId)
+    .maybeSingle();
 
-  if (stageInstanceError) {
-    console.error("submitTimesheet insert stage instance error:", describeError(stageInstanceError));
-    return { success: false, error: "Failed to create the first approval step." };
+  const stageInstancePayload = {
+    wfs_id: firstStage.wfs_id,
+    status_id: pendingStatusId,
+    comments: null,
+    acted_at: null,
+    acted_by: null,
+    is_active: true,
+  };
+
+  if (existingStageInstance) {
+    const { error: stageInstanceError } = await supabase
+      .from("wfk_t_stageinstance")
+      .update(stageInstancePayload)
+      .eq("stageinstance_id", existingStageInstance.stageinstance_id);
+
+    if (stageInstanceError) {
+      console.error("submitTimesheet update stage instance error:", describeError(stageInstanceError));
+      return { success: false, error: "Failed to reset the approval step." };
+    }
+  } else {
+    const { error: stageInstanceError } = await supabase
+      .from("wfk_t_stageinstance")
+      .insert({ instance_id: instanceId, ...stageInstancePayload });
+
+    if (stageInstanceError) {
+      console.error("submitTimesheet insert stage instance error:", describeError(stageInstanceError));
+      return { success: false, error: "Failed to create the first approval step." };
+    }
   }
 
   return { success: true, record: submission };
@@ -1223,9 +1252,10 @@ export async function loadSubmissionLogs(submissionId) {
 }
 
 /**
- * Load this user's approval queue: pending items awaiting their action at
- * whichever stage their org role(s) participate in, plus history of items
- * they've personally acted on before (approved or returned).
+ * Load this user's approval queue. There is exactly one wfk_t_stageinstance
+ * row per document (updated in place through its whole lifecycle), so the
+ * query is simply "stage instances at stages my org roles participate in" —
+ * one current row per document, nothing to deduplicate.
  */
 export async function loadApprovalQueue(weekStartDate) {
   const userId = await getSessionUserId();
@@ -1239,26 +1269,20 @@ export async function loadApprovalQueue(weekStartDate) {
     .eq("user_id", userId)
     .eq("is_active", true);
   const orgRoleIds = [...new Set((userOrgRoleRows || []).map((r) => r.role_id).filter(Boolean))];
+  if (!orgRoleIds.length) return [];
 
-  const { data: participantRows } = orgRoleIds.length
-    ? await supabase
-      .from("wfk_m_stageparticipant")
-      .select("wfs_id")
-      .in("orgrole_id", orgRoleIds)
-      .eq("is_active", true)
-    : { data: [] };
+  const { data: participantRows } = await supabase
+    .from("wfk_m_stageparticipant")
+    .select("wfs_id")
+    .in("orgrole_id", orgRoleIds)
+    .eq("is_active", true);
   const participantWfsIds = [...new Set((participantRows || []).map((r) => r.wfs_id).filter(Boolean))];
-
-  const orFilterParts = [`acted_by.eq.${userId}`];
-  if (participantWfsIds.length) {
-    orFilterParts.push(`and(wfs_id.in.(${participantWfsIds.join(",")}),acted_by.is.null)`);
-  }
+  if (!participantWfsIds.length) return [];
 
   const { data: stageInstances, error: siError } = await supabase
     .from("wfk_t_stageinstance")
     .select("*")
-    .or(orFilterParts.join(","))
-    .order("created_at", { ascending: false });
+    .in("wfs_id", participantWfsIds);
 
   if (siError || !stageInstances?.length) return [];
 
@@ -1295,11 +1319,11 @@ export async function loadApprovalQueue(weekStartDate) {
     (requestors || []).map((u) => [u.user_id, `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username]),
   );
 
-  const workflowStatusIds = [...new Set((workflowInstances || []).map((wi) => wi.status_id).filter(Boolean))];
-  const { data: workflowStatuses } = workflowStatusIds.length
-    ? await supabase.from("wfk_s_status").select("status_id, status_name").in("status_id", workflowStatusIds)
+  const stageStatusIds = [...new Set(relevant.map((si) => si.status_id).filter(Boolean))];
+  const { data: stageStatuses } = stageStatusIds.length
+    ? await supabase.from("wfk_s_status").select("status_id, status_name").in("status_id", stageStatusIds)
     : { data: [] };
-  const workflowStatusById = new Map((workflowStatuses || []).map((s) => [s.status_id, s.status_name]));
+  const stageStatusById = new Map((stageStatuses || []).map((s) => [s.status_id, s.status_name]));
 
   return relevant
     .map((si) => {
@@ -1318,7 +1342,7 @@ export async function loadApprovalQueue(weekStartDate) {
         total_hours: submission.total_hours,
         remarks: submission.remarks,
         stage_name: stageById.get(si.wfs_id)?.stage_name || "--",
-        workflow_status_name: workflowStatusById.get(instance?.status_id) || "--",
+        stage_status_name: stageStatusById.get(si.status_id) || "--",
         is_actionable: si.acted_by === null,
         acted_at: si.acted_at,
         comments: si.comments,
@@ -1372,15 +1396,6 @@ export async function approveTimesheetStage(stageinstanceId, comments) {
   const pendingStatusId = await getWorkflowStatusId(supabase, WORKFLOW_STATUS_PENDING);
   const now = new Date().toISOString();
 
-  const { error: updateSiError } = await supabase
-    .from("wfk_t_stageinstance")
-    .update({ status_id: approvedStatusId, acted_at: now, acted_by: userId, comments: comments || null })
-    .eq("stageinstance_id", stageinstanceId);
-  if (updateSiError) {
-    console.error("approveTimesheetStage update stage instance error:", describeError(updateSiError));
-    return { success: false, error: "Failed to record approval." };
-  }
-
   const { data: nextStage } = await supabase
     .from("wfk_s_workflowstages")
     .select("wfs_id")
@@ -1392,23 +1407,56 @@ export async function approveTimesheetStage(stageinstanceId, comments) {
     .maybeSingle();
 
   if (nextStage) {
-    await supabase
+    // Same row, advanced in place to the next stage — no new row inserted.
+    const { error: updateSiError } = await supabase
+      .from("wfk_t_stageinstance")
+      .update({
+        wfs_id: nextStage.wfs_id,
+        status_id: pendingStatusId,
+        comments: null,
+        acted_at: null,
+        acted_by: null,
+        is_active: true,
+      })
+      .eq("stageinstance_id", stageinstanceId);
+
+    if (updateSiError) {
+      console.error("approveTimesheetStage advance error:", describeError(updateSiError));
+      return { success: false, error: "Approved this step, but failed to advance to the next one." };
+    }
+
+    const { error: instanceError } = await supabase
       .from("wfk_t_workflowinstance")
       .update({ current_wfs_id: nextStage.wfs_id })
       .eq("instance_id", stageInstance.instance_id);
 
-    const { error: insertNextError } = await supabase
-      .from("wfk_t_stageinstance")
-      .insert({ instance_id: stageInstance.instance_id, wfs_id: nextStage.wfs_id, status_id: pendingStatusId });
-    if (insertNextError) {
-      console.error("approveTimesheetStage insert next stage error:", describeError(insertNextError));
-      return { success: false, error: "Approved this step, but failed to advance to the next one." };
+    if (instanceError) {
+      console.error("approveTimesheetStage update instance error:", describeError(instanceError));
+      return { success: false, error: "Approved this step, but failed to update the request." };
     }
   } else {
+    // Final stage — this row's terminal state.
+    const { error: updateSiError } = await supabase
+      .from("wfk_t_stageinstance")
+      .update({
+        status_id: approvedStatusId,
+        acted_at: now,
+        acted_by: userId,
+        comments: comments || null,
+        is_active: false,
+      })
+      .eq("stageinstance_id", stageinstanceId);
+
+    if (updateSiError) {
+      console.error("approveTimesheetStage final update error:", describeError(updateSiError));
+      return { success: false, error: "Failed to record approval." };
+    }
+
     const { error: completeError } = await supabase
       .from("wfk_t_workflowinstance")
       .update({ status_id: approvedStatusId, completed_at: now })
       .eq("instance_id", stageInstance.instance_id);
+
     if (completeError) {
       console.error("approveTimesheetStage complete instance error:", describeError(completeError));
       return { success: false, error: "Approved this step, but failed to finalize the request." };
@@ -1458,7 +1506,7 @@ export async function returnTimesheetStage(stageinstanceId, comments) {
 
   const { error: updateSiError } = await supabase
     .from("wfk_t_stageinstance")
-    .update({ status_id: returnedStatusId, acted_at: now, acted_by: userId, comments: trimmedComments })
+    .update({ status_id: returnedStatusId, acted_at: now, acted_by: userId, comments: trimmedComments, is_active: true })
     .eq("stageinstance_id", stageinstanceId);
   if (updateSiError) {
     console.error("returnTimesheetStage update stage instance error:", describeError(updateSiError));
