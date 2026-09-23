@@ -113,6 +113,22 @@ function formatClockTime(date) {
   });
 }
 
+/** "SEP 21, 2026" — Timesheets page date-only cells. */
+function formatSheetDate(dateStr) {
+  if (!dateStr) return "--";
+  const d = new Date(`${dateStr}T00:00:00`);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }).toUpperCase();
+}
+
+/** "SEP 21, 2026 | 09:00 PM" — Timesheets page clock-in/out cells. */
+function formatSheetDateTime(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return "--";
+  const d = new Date(`${dateStr}T${timeStr}`);
+  const datePart = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }).toUpperCase();
+  const timePart = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+  return `${datePart} | ${timePart}`;
+}
+
 /**
  * Local date as YYYY-MM-DD (matches the server actions' date format).
  */
@@ -1713,6 +1729,12 @@ function TimesheetsPage() {
   const [selectedUserIds, setSelectedUserIds] = useState(() => new Set());
   const [employeeDetails, setEmployeeDetails] = useState({});
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [employeeSearch, setEmployeeSearch] = useState("");
+
+  const filteredEmployees = useMemo(
+    () => employees.filter((e) => e.name.toLowerCase().includes(employeeSearch.trim().toLowerCase())),
+    [employees, employeeSearch],
+  );
 
   const weekRange = useMemo(() => {
     const now = new Date();
@@ -1773,10 +1795,19 @@ function TimesheetsPage() {
   }, []);
 
   const toggleSelectAll = useCallback(() => {
-    setSelectedUserIds((prev) =>
-      prev.size === employees.length ? new Set() : new Set(employees.map((e) => e.user_id)),
-    );
-  }, [employees]);
+    setSelectedUserIds((prev) => {
+      const allFilteredSelected =
+        filteredEmployees.length > 0 && filteredEmployees.every((e) => prev.has(e.user_id));
+      if (allFilteredSelected) {
+        const next = new Set(prev);
+        filteredEmployees.forEach((e) => next.delete(e.user_id));
+        return next;
+      }
+      const next = new Set(prev);
+      filteredEmployees.forEach((e) => next.add(e.user_id));
+      return next;
+    });
+  }, [filteredEmployees]);
 
   const goPreviousWeek = useCallback(() => {
     setLoadingEmployees(true);
@@ -1897,13 +1928,24 @@ function TimesheetsPage() {
       <div className="tt-timesheets-layout">
         <aside className="tt-timesheets-employee-list">
           {employees.length > 0 && (
+            <div className="tt-timesheets-search-wrap">
+              <Input
+                type="search"
+                placeholder="Search employee..."
+                value={employeeSearch}
+                onChange={(event) => setEmployeeSearch(event.target.value)}
+              />
+            </div>
+          )}
+
+          {employees.length > 0 && (
             <label className="tt-timesheets-employee-item tt-timesheets-select-all">
               <input
                 type="checkbox"
-                checked={selectedUserIds.size === employees.length}
+                checked={filteredEmployees.length > 0 && filteredEmployees.every((e) => selectedUserIds.has(e.user_id))}
                 onChange={toggleSelectAll}
               />
-              <span>Select All</span>
+              <span className="tt-timesheets-employee-name">Select All</span>
             </label>
           )}
 
@@ -1911,16 +1953,24 @@ function TimesheetsPage() {
             <p className="tt-timesheets-empty">Loading employees...</p>
           ) : employees.length === 0 ? (
             <p className="tt-timesheets-empty">No timesheets submitted for this week.</p>
+          ) : filteredEmployees.length === 0 ? (
+            <p className="tt-timesheets-empty">No employees match your search.</p>
           ) : (
-            employees.map((employee) => (
+            filteredEmployees.map((employee) => (
               <label key={employee.user_id} className="tt-timesheets-employee-item">
                 <input
                   type="checkbox"
                   checked={selectedUserIds.has(employee.user_id)}
                   onChange={() => toggleEmployee(employee.user_id)}
                 />
-                <span>{employee.name}</span>
-                <StatusBadge status={String(employee.status_name || "").toLowerCase()} label={employee.status_name} />
+                <span className="tt-timesheets-employee-name" title={employee.name}>
+                  {employee.name}
+                </span>
+                <StatusBadge
+                  status={String(employee.status_name || "").toLowerCase()}
+                  label={employee.status_name}
+                  className="tt-timesheets-employee-badge"
+                />
               </label>
             ))
           )}
@@ -1961,9 +2011,9 @@ function TimesheetsPage() {
                           ) : (
                             detail.logs.map((log) => (
                               <tr key={log.log_id}>
-                                <td>{log.clock_in_date}</td>
-                                <td>{log.clock_in_time ? `${log.clock_in_date} ${log.clock_in_time}` : "--"}</td>
-                                <td>{log.clock_out_time ? `${log.clock_out_date} ${log.clock_out_time}` : "--"}</td>
+                                <td>{formatSheetDate(log.clock_in_date)}</td>
+                                <td>{log.clock_in_time ? formatSheetDateTime(log.clock_in_date, log.clock_in_time) : "--"}</td>
+                                <td>{log.clock_out_time ? formatSheetDateTime(log.clock_out_date, log.clock_out_time) : "--"}</td>
                                 <td>{log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--"}</td>
                               </tr>
                             ))

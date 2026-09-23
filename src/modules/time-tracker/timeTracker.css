@@ -2121,6 +2121,23 @@
   background: #f8fbfb;
 }
 
+.tt-timesheets-employee-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-timesheets-employee-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.tt-timesheets-search-wrap {
+  padding: 0.6rem 1.25rem 0.25rem;
+}
+
 .tt-timesheets-select-all {
   border-bottom: 1px solid #e1ebec;
   font-weight: 600;
