@@ -1086,6 +1086,65 @@ export async function loadTimesheetsForWeek(weekStartDate) {
  * row. Authorized only for the submission's own owner, an approver on any
  * stage of its workflow, or an Admin — not just anyone who guesses an id.
  */
+/**
+ * The wfk_* authorization chain — read-only, unchanged logic, just extracted
+ * for reuse/parallelizing.
+ */
+async function checkIsAuthorizedApprover(supabase, userId, submissionId) {
+  const { data: instance } = await supabase
+    .from("wfk_t_workflowinstance")
+    .select("instance_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("document_id", submissionId)
+    .maybeSingle();
+  if (!instance) return false;
+
+  const { data: stageInstances } = await supabase
+    .from("wfk_t_stageinstance")
+    .select("wfs_id")
+    .eq("instance_id", instance.instance_id);
+  const wfsIds = [...new Set((stageInstances || []).map((si) => si.wfs_id).filter(Boolean))];
+  if (!wfsIds.length) return false;
+
+  const { data: participants } = await supabase
+    .from("wfk_m_stageparticipant")
+    .select("orgrole_id")
+    .in("wfs_id", wfsIds)
+    .eq("is_active", true);
+  const orgRoleIds = [...new Set((participants || []).map((p) => p.orgrole_id).filter(Boolean))];
+  if (!orgRoleIds.length) return false;
+
+  const { data: userOrgRole } = await supabase
+    .from("wfk_m_userorgrole")
+    .select("user_orgrole_id")
+    .eq("user_id", userId)
+    .in("role_id", orgRoleIds)
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+  return Boolean(userOrgRole);
+}
+
+/** Lean Admin check — only fetches app-role data, unlike loadTimeTrackerRoles which also fetches unused org roles. */
+async function checkIsTimeTrackerAdmin(supabase, userId) {
+  const { data: accessRows } = await supabase
+    .from("psb_m_userapproleaccess")
+    .select("role_id")
+    .eq("user_id", userId)
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("is_active", true);
+  const roleIds = [...new Set((accessRows || []).map((r) => r.role_id).filter(Boolean))];
+  if (!roleIds.length) return false;
+
+  const { data: roles } = await supabase
+    .from("psb_s_role")
+    .select("role_name")
+    .in("role_id", roleIds)
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("is_active", true);
+  return (roles || []).some((r) => String(r.role_name || "").trim().toLowerCase() === "admin");
+}
+
 export async function loadSubmissionLogs(submissionId) {
   const userId = await getSessionUserId();
   if (!userId) return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
@@ -1101,68 +1160,32 @@ export async function loadSubmissionLogs(submissionId) {
 
   const isOwner = submission.user_id === userId;
 
-  let isAuthorizedApprover = false;
   if (!isOwner) {
-    const { data: instance } = await supabase
-      .from("wfk_t_workflowinstance")
-      .select("instance_id")
-      .eq("app_id", TIME_TRACKER_APP_ID)
-      .eq("document_id", submissionId)
-      .maybeSingle();
+    const [isAuthorizedApprover, isAdmin] = await Promise.all([
+      checkIsAuthorizedApprover(supabase, userId, submissionId),
+      checkIsTimeTrackerAdmin(supabase, userId),
+    ]);
 
-    if (instance) {
-      const { data: stageInstances } = await supabase
-        .from("wfk_t_stageinstance")
-        .select("wfs_id")
-        .eq("instance_id", instance.instance_id);
-      const wfsIds = [...new Set((stageInstances || []).map((si) => si.wfs_id).filter(Boolean))];
-
-      if (wfsIds.length) {
-        const { data: participants } = await supabase
-          .from("wfk_m_stageparticipant")
-          .select("orgrole_id")
-          .in("wfs_id", wfsIds)
-          .eq("is_active", true);
-        const orgRoleIds = [...new Set((participants || []).map((p) => p.orgrole_id).filter(Boolean))];
-
-        if (orgRoleIds.length) {
-          const { data: userOrgRole } = await supabase
-            .from("wfk_m_userorgrole")
-            .select("user_orgrole_id")
-            .eq("user_id", userId)
-            .in("role_id", orgRoleIds)
-            .eq("is_active", true)
-            .limit(1)
-            .maybeSingle();
-          isAuthorizedApprover = Boolean(userOrgRole);
-        }
-      }
+    if (!isAuthorizedApprover && !isAdmin) {
+      return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
     }
   }
 
-  const { roles } = await loadTimeTrackerRoles(supabase, userId);
-  const isAdmin = roles.some(
-    (r) => String(r?.role_name || "").trim().toLowerCase() === "admin" && r.is_active !== false,
-  );
+  const [logsResult, hoursTargetResult] = await Promise.all([
+    supabase
+      .from("time_t_logs")
+      .select("*")
+      .eq("submission_id", submissionId)
+      .order("clock_in_date", { ascending: true }),
+    loadHoursTargetInfo(supabase, submission.user_id),
+  ]);
 
-  if (!isOwner && !isAuthorizedApprover && !isAdmin) {
-    return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
+  if (logsResult.error) {
+    console.error("loadSubmissionLogs error:", describeError(logsResult.error));
+    return { logs: [], weeklyHoursTarget: hoursTargetResult.weeklyHoursTarget };
   }
 
-  const { data, error } = await supabase
-    .from("time_t_logs")
-    .select("*")
-    .eq("submission_id", submissionId)
-    .order("clock_in_date", { ascending: true });
-
-  if (error) {
-    console.error("loadSubmissionLogs error:", describeError(error));
-    return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
-  }
-
-  const { weeklyHoursTarget } = await loadHoursTargetInfo(supabase, submission.user_id);
-
-  return { logs: data || [], weeklyHoursTarget };
+  return { logs: logsResult.data || [], weeklyHoursTarget: hoursTargetResult.weeklyHoursTarget };
 }
 
 /**
