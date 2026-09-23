@@ -734,6 +734,7 @@ function TimeLogTable({
   loading,
   onEdit,
 }) {
+  const weekDateInputRef = useRef(null);
   return (
     <div className="tt-table-card">
       {/* Table Header */}
@@ -755,12 +756,16 @@ function TimeLogTable({
           >
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
-          <div className="tt-week-picker">
+          <div
+            className="tt-week-picker"
+            onClick={() => weekDateInputRef.current?.showPicker?.()}
+          >
             <h3 className="tt-table-title">
               <span>Time Log for</span>
               <strong>{weekRange.label.replace(" - ", " – ")}</strong>
             </h3>
             <input
+              ref={weekDateInputRef}
               type="date"
               className="tt-week-picker-input"
               value={toDateStr(weekRange.start)}
@@ -1569,6 +1574,7 @@ function ApprovalDetailPanel({ row }) {
 
 function ApprovalsPage() {
   const [weekOffset, setWeekOffset] = useState(0);
+  const weekDateInputRef = useRef(null);
   const [statusTab, setStatusTab] = useState("pending");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1714,9 +1720,13 @@ function ApprovalsPage() {
           <button type="button" onClick={goNextWeek} className="tt-nav-arrow" aria-label="Next week">
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
-          <div className="tt-week-picker">
+          <div
+            className="tt-week-picker"
+            onClick={() => weekDateInputRef.current?.showPicker?.()}
+          >
             <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
             <input
+              ref={weekDateInputRef}
               type="date"
               className="tt-week-picker-input"
               value={toDateStr(weekRange.start)}
@@ -1778,6 +1788,7 @@ function ApprovalsPage() {
 
 function TimesheetsPage() {
   const [weekOffset, setWeekOffset] = useState(0);
+  const weekDateInputRef = useRef(null);
   const [employees, setEmployees] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(true);
   const [selectedUserIds, setSelectedUserIds] = useState(() => new Set());
@@ -1967,9 +1978,13 @@ function TimesheetsPage() {
           <button type="button" onClick={goNextWeek} className="tt-nav-arrow" aria-label="Next week">
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
-          <div className="tt-week-picker">
+          <div
+            className="tt-week-picker"
+            onClick={() => weekDateInputRef.current?.showPicker?.()}
+          >
             <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
             <input
+              ref={weekDateInputRef}
               type="date"
               className="tt-week-picker-input"
               value={toDateStr(weekRange.start)}
