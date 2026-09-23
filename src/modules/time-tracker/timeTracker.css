@@ -2138,6 +2138,24 @@
   padding: 0.6rem 1.25rem 0.25rem;
 }
 
+.tt-week-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tt-week-picker-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
 .tt-timesheets-select-all {
   border-bottom: 1px solid #e1ebec;
   font-weight: 600;

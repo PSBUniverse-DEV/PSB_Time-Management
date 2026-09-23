@@ -129,6 +129,20 @@ function formatSheetDateTime(dateStr, timeStr) {
   return `${datePart} | ${timePart}`;
 }
 
+/** Weeks between today's Monday and the Monday of the week containing `dateStr`. */
+function computeWeekOffsetFromToday(dateStr) {
+  const picked = new Date(`${dateStr}T00:00:00`);
+  const pickedMonday = new Date(picked);
+  pickedMonday.setDate(picked.getDate() - ((picked.getDay() + 6) % 7));
+
+  const now = new Date();
+  const thisMonday = new Date(now);
+  thisMonday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+
+  const diffDays = Math.round((pickedMonday - thisMonday) / (1000 * 60 * 60 * 24));
+  return diffDays / 7;
+}
+
 /**
  * Local date as YYYY-MM-DD (matches the server actions' date format).
  */
@@ -370,6 +384,10 @@ function useLogsPage(initialData, permissions) {
   );
   const goNextWeek = useCallback(() => setWeekOffset((prev) => prev + 1), []);
   const goThisWeek = useCallback(() => setWeekOffset(0), []);
+  const goToWeekOfDate = useCallback(
+    (dateStr) => setWeekOffset(computeWeekOffsetFromToday(dateStr)),
+    [],
+  );
 
   // Clock in/clock out against the database via server actions.
   const handleClockToggle = useCallback(async () => {
@@ -490,6 +508,8 @@ function useLogsPage(initialData, permissions) {
     goPreviousWeek,
     goNextWeek,
     goThisWeek,
+    goToWeekOfDate,
+
     weekOffset,
     weekLoading,
     totalHours,
@@ -709,6 +729,7 @@ function TimeLogTable({
   onPrevWeek,
   onNextWeek,
   onThisWeek,
+  onPickWeek,
   weekOffset,
   loading,
   onEdit,
@@ -734,10 +755,19 @@ function TimeLogTable({
           >
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
-          <h3 className="tt-table-title">
-            <span>Time Log for</span>
-            <strong>{weekRange.label.replace(" - ", " – ")}</strong>
-          </h3>
+          <div className="tt-week-picker">
+            <h3 className="tt-table-title">
+              <span>Time Log for</span>
+              <strong>{weekRange.label.replace(" - ", " – ")}</strong>
+            </h3>
+            <input
+              type="date"
+              className="tt-week-picker-input"
+              value={toDateStr(weekRange.start)}
+              onChange={(event) => onPickWeek(event.target.value)}
+              aria-label="Jump to the week containing this date"
+            />
+          </div>
         </div>
         <button
           type="button"
@@ -1658,6 +1688,10 @@ function ApprovalsPage() {
     setLoading(true);
     setWeekOffset(0);
   }, []);
+  const goToWeekOfDate = useCallback((dateStr) => {
+    setLoading(true);
+    setWeekOffset(computeWeekOffsetFromToday(dateStr));
+  }, []);
 
   return (
     <div className="tt-setup-page-body">
@@ -1669,7 +1703,16 @@ function ApprovalsPage() {
           <button type="button" onClick={goNextWeek} className="tt-nav-arrow" aria-label="Next week">
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
-          <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
+          <div className="tt-week-picker">
+            <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
+            <input
+              type="date"
+              className="tt-week-picker-input"
+              value={toDateStr(weekRange.start)}
+              onChange={(event) => goToWeekOfDate(event.target.value)}
+              aria-label="Jump to the week containing this date"
+            />
+          </div>
         </div>
         <div className="tt-table-header-right">
           <button type="button" onClick={goThisWeek} className="tt-pill-week">
@@ -1827,6 +1870,12 @@ function TimesheetsPage() {
     setEmployeeDetails({});
     setWeekOffset(0);
   }, []);
+  const goToWeekOfDate = useCallback((dateStr) => {
+    setLoadingEmployees(true);
+    setSelectedUserIds(new Set());
+    setEmployeeDetails({});
+    setWeekOffset(computeWeekOffsetFromToday(dateStr));
+  }, []);
 
   const handlePrintPdf = async () => {
     if (selectedUserIds.size === 0) return;
@@ -1907,7 +1956,16 @@ function TimesheetsPage() {
           <button type="button" onClick={goNextWeek} className="tt-nav-arrow" aria-label="Next week">
             <FontAwesomeIcon icon={faChevronRight} />
           </button>
-          <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
+          <div className="tt-week-picker">
+            <h3 className="tt-table-title">{weekRange.fullLabel}</h3>
+            <input
+              type="date"
+              className="tt-week-picker-input"
+              value={toDateStr(weekRange.start)}
+              onChange={(event) => goToWeekOfDate(event.target.value)}
+              aria-label="Jump to the week containing this date"
+            />
+          </div>
         </div>
         <div className="tt-table-header-right">
           <Button type="button" variant="secondary" onClick={goThisWeek}>
@@ -2099,6 +2157,8 @@ export default function TimeTrackerView({ initialData }) {
     weekRange,
     weekRows,
     goPreviousWeek,
+    goToWeekOfDate,
+
     goNextWeek,
     goThisWeek,
     weekOffset,
@@ -2174,6 +2234,7 @@ export default function TimeTrackerView({ initialData }) {
               onPrevWeek={goPreviousWeek}
               onNextWeek={goNextWeek}
               onThisWeek={goThisWeek}
+              onPickWeek={goToWeekOfDate}
               weekOffset={weekOffset}
               loading={weekLoading}
               onEdit={setEditingRow}
