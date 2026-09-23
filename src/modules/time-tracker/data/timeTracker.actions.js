@@ -1127,19 +1127,21 @@ export async function loadTimesheetsForWeek(weekStartDate) {
     : { data: [] };
   const statusNameById = new Map((statuses || []).map((s) => [s.status_id, s.status_name]));
 
-  return submissions.map((s) => {
-    const user = userById.get(s.user_id);
-    const name = user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username : "Unknown";
-    const statusId = statusIdByDoc.get(s.submission_id);
-    return {
-      submission_id: s.submission_id,
-      user_id: s.user_id,
-      name,
-      total_hours: s.total_hours,
-      remarks: s.remarks,
-      status_name: statusNameById.get(statusId) || "--",
-    };
-  });
+  return submissions
+    .map((s) => {
+      const user = userById.get(s.user_id);
+      const name = user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username : "Unknown";
+      const statusId = statusIdByDoc.get(s.submission_id);
+      return {
+        submission_id: s.submission_id,
+        user_id: s.user_id,
+        name,
+        total_hours: s.total_hours,
+        remarks: s.remarks,
+        status_name: statusNameById.get(statusId) || "--",
+      };
+    })
+    .filter((employee) => employee.status_name.toLowerCase() === "approved");
 }
 
 // ── Approvals ────────────────────────────────────────────────
