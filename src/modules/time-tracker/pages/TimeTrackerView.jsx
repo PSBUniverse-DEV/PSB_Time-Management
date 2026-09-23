@@ -1990,12 +1990,6 @@ function TimesheetsPage() {
 
         cursorY = doc.lastAutoTable.finalY + 24;
 
-        if (employee.remarks) {
-          doc.setFontSize(9);
-          doc.text(`Remarks: ${employee.remarks}`, 40, cursorY);
-          cursorY += 20;
-        }
-
         cursorY += 16;
       });
 
@@ -2034,18 +2028,24 @@ function TimesheetsPage() {
           </div>
         </div>
         <div className="tt-table-header-right">
-          <Button type="button" variant="secondary" onClick={goThisWeek}>
-            This Week
-          </Button>
-          <Button
+          <button
             type="button"
-            variant="primary"
-            onClick={handlePrintPdf}
-            loading={generatingPdf}
-            disabled={selectedUserIds.size === 0}
+            className="tt-pill-week"
+            onClick={goThisWeek}
+            disabled={weekOffset === 0}
           >
-            <FontAwesomeIcon icon={faDownload} /> Print PDF
-          </Button>
+            This Week
+          </button>
+          <button
+            type="button"
+            className="tt-btn-export"
+            onClick={handlePrintPdf}
+            disabled={selectedUserIds.size === 0 || generatingPdf}
+            aria-label="Print PDF"
+            title="Print PDF"
+          >
+            <FontAwesomeIcon icon={faDownload} />
+          </button>
         </div>
       </div>
 
