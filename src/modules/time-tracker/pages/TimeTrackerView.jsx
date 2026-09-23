@@ -1623,7 +1623,7 @@ function ApprovalsPage() {
 
   const filteredRows = useMemo(() => {
     if (statusTab === "all") return rows;
-    return rows.filter((row) => String(row.workflow_status_name || "").toLowerCase() === statusTab);
+    return rows.filter((row) => String(row.stage_status_name || "").toLowerCase() === statusTab);
   }, [rows, statusTab]);
 
   const columns = useMemo(
@@ -1638,11 +1638,11 @@ function ApprovalsPage() {
       },
       { key: "stage_name", label: "Stage", minWidth: 160 },
       {
-        key: "workflow_status_name",
+        key: "stage_status_name",
         label: "Status",
         minWidth: 130,
         render: (row) => (
-          <StatusBadge status={String(row.workflow_status_name || "").toLowerCase()} label={row.workflow_status_name} />
+          <StatusBadge status={String(row.stage_status_name || "").toLowerCase()} label={row.stage_status_name} />
         ),
       },
       {
