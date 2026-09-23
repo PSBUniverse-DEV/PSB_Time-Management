@@ -645,10 +645,43 @@ function TimeInOutButton({ clockedIn, onToggle, disabled }) {
   );
 }
 
-function LogsToolbar() {
+/** Wraps a CSV field in quotes only when it actually needs it. */
+function csvField(value) {
+  const str = String(value ?? "");
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+/** Builds a CSV string from the current week's log rows. */
+function buildLogsCsv(weekRows) {
+  const header = ["Day", "Date", "Clocked In Date", "Clocked In Time", "Clocked Out Date", "Clocked Out Time", "Hours"];
+  const lines = weekRows.map((row) => [
+    row.dayName,
+    row.date,
+    row.hasData ? row.clockedInDate || "--" : "--",
+    row.hasData ? row.clockedInTime || "--" : "--",
+    row.hasData && row.clockedOutDate ? row.clockedOutDate : "--",
+    row.hasData && row.clockedOutTime ? row.clockedOutTime : "--",
+    row.hasData && row.hours != null ? Number(row.hours).toFixed(2) : "--",
+  ].map(csvField).join(","));
+
+  return [header.map(csvField).join(","), ...lines].join("\n");
+}
+
+/** Triggers a browser download of `content` as a file named `filename`. */
+function downloadTextFile(content, filename, mimeType = "text/csv;charset=utf-8;") {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function LogsToolbar({ onExport }) {
   return (
     <div className="tt-logs-toolbar">
-      <button type="button" className="tt-btn-export">
+      <button type="button" className="tt-btn-export" onClick={onExport}>
         <FontAwesomeIcon icon={faDownload} />
       </button>
     </div>
@@ -735,6 +768,13 @@ function TimeLogTable({
   onEdit,
 }) {
   const weekDateInputRef = useRef(null);
+
+  const handleExportCsv = useCallback(() => {
+    const csv = buildLogsCsv(weekRows);
+    const filename = `time-log-${toDateStr(weekRange.start)}-to-${toDateStr(weekRange.end)}.csv`;
+    downloadTextFile(csv, filename);
+  }, [weekRows, weekRange]);
+
   return (
     <div className="tt-table-card">
       {/* Table Header */}
@@ -782,7 +822,7 @@ function TimeLogTable({
         >
           This Week
         </button>
-        <LogsToolbar />
+        <LogsToolbar onExport={handleExportCsv} />
       </div>
 
       <TableZ
