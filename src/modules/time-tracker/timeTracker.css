@@ -1679,6 +1679,84 @@
   color: #ffffff;
   white-space: nowrap;
 }
+/* ─── Summary: Work Schedule card ─────────────────────────── */
+.tt-summary-schedule-card {
+  border: 1px solid var(--tt-spruce-100);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 0.7rem 0.85rem;
+}
+
+.tt-summary-schedule-card.is-empty {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.tt-summary-schedule-empty {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #b45309;
+}
+
+.tt-summary-schedule-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.tt-summary-schedule-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--tt-spruce-900);
+}
+
+.tt-summary-schedule-hours {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tt-spruce-600);
+  white-space: nowrap;
+}
+
+.tt-summary-schedule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.tt-summary-schedule-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 0.5rem;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tt-summary-schedule-days {
+  font-weight: 600;
+  color: var(--tt-spruce-800);
+}
+
+.tt-summary-schedule-time {
+  color: #334155;
+}
+
+.tt-summary-schedule-break {
+  display: block;
+  color: #64748b;
+}
+
+.tt-summary-schedule-row.is-rest .tt-summary-schedule-days,
+.tt-summary-schedule-row.is-rest .tt-summary-schedule-time {
+  color: #94a3b8;
+}
+
+
 
 .tt-summary-state-card {
   display: flex;
@@ -1815,6 +1893,60 @@
   font-size: 11px;
   line-height: 1.4;
   color: #b45309;
+}
+
+/* ─── Summary: Recall ─────────────────────────────────────── */
+.tt-btn-recall {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--tt-spruce-600);
+  background: #ffffff;
+  color: var(--tt-spruce-800);
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tt-btn-recall:hover:not(:disabled) {
+  background: var(--tt-spruce-50);
+}
+
+.tt-btn-recall:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tt-summary-recall-hint {
+  margin: 0.4rem 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #64748b;
+}
+
+.tt-summary-recall-hint.is-recalled {
+  color: #b45309;
+}
+
+.tt-recall-confirm-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+/* ─── Approvals: undo-approval warning ──────────────────────── */
+.tt-approval-undo-warning {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 /* ─── Edit Time Entry modal ───────────────────────────────── */
@@ -2286,4 +2418,173 @@
 
 .tt-load-error-btn:hover {
   background: #163b48;
+}
+/* ─── Admin Setup: Schedule Models ─────────────────────────── */
+
+.tt-setup-hint {
+  margin: 0 1.5rem 0.85rem;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.tt-setup-muted {
+  color: #94a3b8;
+}
+
+.tt-setup-model-select {
+  max-width: 280px;
+  padding: 0.4rem 0.6rem;
+}
+
+.tt-schedule-header-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 90px;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.tt-schedule-grid-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.tt-schedule-copy-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tt-spruce-600);
+  cursor: pointer;
+}
+
+.tt-schedule-copy-btn:hover {
+  text-decoration: underline;
+}
+
+.tt-schedule-grid-scroll {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+/* Size the table to its own columns instead of forcing a fixed 720px.
+   `min-width: 100%` still stretches it when the dialog happens to be wider. */
+.tt-schedule-grid {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+/* Schedule Model modal: grow to fit the 7-day grid, never wider than the screen.
+   Two classes so it beats Bootstrap's `.modal-dialog { max-width: 500px }`. */
+.modal-dialog.tt-schedule-modal,
+.tt-schedule-modal {
+  width: fit-content;
+  max-width: min(96vw, 1100px);
+}
+
+.modal-dialog.tt-schedule-modal .modal-content,
+.tt-schedule-modal .modal-content {
+  width: 100%;
+}
+
+.tt-schedule-grid th {
+  padding: 0.5rem 0.6rem;
+  background: var(--tt-spruce-50);
+  color: var(--tt-spruce-800);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.tt-schedule-grid td {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+}
+
+.tt-schedule-grid tbody tr.is-rest td {
+  background: #f8fafc;
+}
+
+.tt-schedule-grid tbody tr.has-error td {
+  background: #fef2f2;
+}
+
+.tt-schedule-grid tfoot td {
+  padding: 0.55rem 0.6rem;
+  font-weight: 700;
+  color: var(--tt-spruce-900);
+  background: var(--tt-spruce-50);
+}
+
+.tt-schedule-day-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding-top: 0.35rem;
+  font-weight: 600;
+  color: #1a2e33;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tt-schedule-grid tr.is-rest .tt-schedule-day-toggle span {
+  color: #94a3b8;
+}
+
+.tt-schedule-time {
+  min-width: 110px;
+  padding: 0.4rem 0.5rem;
+}
+
+.tt-schedule-time:disabled {
+  background: #f1f5f9;
+  color: #cbd5e1;
+}
+
+.tt-schedule-nextday {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--tt-spruce-100);
+  color: var(--tt-spruce-800);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tt-schedule-hours-col {
+  width: 150px;
+  text-align: right;
+  font-weight: 600;
+}
+
+.tt-schedule-error {
+  display: block;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.tt-schedule-note {
+  margin: 0.75rem 0 0;
+}
+
+.tt-clock-counted-from {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 10px;
+  font-weight: 600;
+  color: #b45309;
 }

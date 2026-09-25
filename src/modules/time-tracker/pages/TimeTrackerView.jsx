@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   Button,
-  InlineEditCell,
   Input,
   Modal,
   StatusBadge,
@@ -50,17 +49,31 @@ import {
   loadEditReasons,
   loadEditReasonsAdmin,
   loadEmployeeHoursTargets,
+  loadScheduleModels,
   loadTimesheetsForWeek,
   loadTimeTrackerData,
   loadWeekSubmissionStatus,
+  recallTimesheet as recallTimesheetAction,
   returnTimesheetStage,
   saveEditReason,
+  saveScheduleModel,
   saveTimeLogEntry as saveTimeLogEntryAction,
   setEditReasonActive,
-  setUserWeeklyHoursTarget,
+  setScheduleModelActive,
+  setUserScheduleModel,
   submitTimesheet as submitTimesheetAction,
 } from "../data/timeTracker.actions";
 import { getTimeTrackerPermissions } from "../data/timeTracker.permissions";
+import {
+  SCHEDULE_DAYS,
+  computeScheduledDayHours,
+  computeScheduledWeeklyHours,
+  getCountedFromTime,
+  groupScheduleDays,
+  resolveScheduleDay,
+  summarizeScheduleDays,
+  validateScheduleDay,
+} from "../data/timeTracker.data";
 
 // ═══════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -200,6 +213,7 @@ function useLogsPage(initialData, permissions) {
     Number(initialData?.weeklyHoursTarget) || 40,
   );
   const [hasHoursTarget, setHasHoursTarget] = useState(Boolean(initialData?.hasHoursTarget));
+  const [schedule, setSchedule] = useState(initialData?.schedule ?? null);
   const navItems = useMemo(() => buildNavItems(permissions), [permissions]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeNav, setActiveNav] = useState(navItems[0]?.key || "logs");
@@ -220,9 +234,11 @@ function useLogsPage(initialData, permissions) {
     statusName: null,
     submittedAt: null,
     remarks: "",
+    canRecall: false,
   });
   const [remarks, setRemarks] = useState("");
   const [submittingTimesheet, setSubmittingTimesheet] = useState(false);
+  const [recallingTimesheet, setRecallingTimesheet] = useState(false);
 
   // Live clock tick
   useEffect(() => {
@@ -242,6 +258,7 @@ function useLogsPage(initialData, permissions) {
       if (data.status === "load-error") return false;
       setWeeklyHoursTarget(Number(data.weeklyHoursTarget) || 40);
       setHasHoursTarget(Boolean(data.hasHoursTarget));
+      setSchedule(data.schedule ?? null);
       return true;
     } catch {
       return false;
@@ -365,6 +382,14 @@ function useLogsPage(initialData, permissions) {
         isToday: rowDate === today,
         clockedInDate: log ? formatDateDisplay(log.clock_in_date) : null,
         clockedInTime: log ? formatTimeDisplay(log.clock_in_time) : null,
+        // Shown when the employee arrived before their scheduled start, so
+        // the "Counted from" line explains why the hours look shorter.
+        countedFromTime: log
+          ? (() => {
+              const hhmm = getCountedFromTime(log.clock_in_date, log.clock_in_time, schedule?.days);
+              return hhmm ? formatTimeDisplay(hhmm) : null;
+            })()
+          : null,
         clockOutIsoDate: log?.clock_out_date ?? null,
         clockedOutDate: log?.clock_out_date
           ? formatDateDisplay(log.clock_out_date)
@@ -373,25 +398,28 @@ function useLogsPage(initialData, permissions) {
           ? formatTimeDisplay(log.clock_out_time)
           : null,
         hours: log?.total_hours ?? null,
+        overtimeHours: Number(log?.overtime_hours) || 0,
         hasData: Boolean(log),
         logId: log?.log_id ?? null,
       };
     });
-  }, [weekRange, weekLogs]);
+  }, [weekRange, weekLogs, schedule]);
 
   const totalHours = useMemo(
     () => weekRows.reduce((total, row) => total + (Number(row.hours) || 0), 0),
     [weekRows],
   );
 
-  const regularHours = useMemo(
-    () => Math.min(totalHours, weeklyHoursTarget),
-    [totalHours, weeklyHoursTarget],
+  // Overtime is per-log (time after the scheduled clock-out), so it sums
+  // straight from the logs. Regular is simply the remainder of the total.
+  const overtimeHours = useMemo(
+    () => weekRows.reduce((total, row) => total + row.overtimeHours, 0),
+    [weekRows],
   );
 
-  const overtimeHours = useMemo(
-    () => Math.max(totalHours - weeklyHoursTarget, 0),
-    [totalHours, weeklyHoursTarget],
+  const regularHours = useMemo(
+    () => Math.max(totalHours - overtimeHours, 0),
+    [totalHours, overtimeHours],
   );
 
   const goPreviousWeek = useCallback(
@@ -514,6 +542,31 @@ function useLogsPage(initialData, permissions) {
     }
   }, [submittingTimesheet, isSubmissionLocked, permissions.isRequestor, weekRange, remarks]);
 
+  // Pull the submission back so the week unlocks for editing. The status is
+  // refreshed on failure too, so if an approver beat us to it the panel
+  // immediately shows what they did instead of a stale "Pending".
+  const handleRecallTimesheet = useCallback(async () => {
+    if (recallingTimesheet) return false;
+    setRecallingTimesheet(true);
+    try {
+      const result = await recallTimesheetAction({ weekStartDate: toDateStr(weekRange.start) });
+      const refreshed = await loadWeekSubmissionStatus(toDateStr(weekRange.start));
+      setSubmissionStatus(refreshed);
+      if (result.success) {
+        toastSuccess("Timesheet recalled. You can now edit your logs and submit again.", "Time Tracker");
+        return true;
+      }
+      toastError(result.error || "Failed to recall the timesheet.", "Time Tracker");
+      return false;
+    } catch (err) {
+      console.error("recallTimesheet failed:", err);
+      toastError("Something went wrong. Please try again.", "Time Tracker");
+      return false;
+    } finally {
+      setRecallingTimesheet(false);
+    }
+  }, [recallingTimesheet, weekRange]);
+
   return {
     currentTime,
     activeNav,
@@ -533,6 +586,7 @@ function useLogsPage(initialData, permissions) {
     overtimeHours,
     weeklyHoursTarget,
     hasHoursTarget,
+    schedule,
     refreshHoursTarget,
     clockedIn,
     lastClockIn,
@@ -545,6 +599,8 @@ function useLogsPage(initialData, permissions) {
     isSubmissionLocked,
     submittingTimesheet,
     handleSubmitTimesheet,
+    recallingTimesheet,
+    handleRecallTimesheet,
   };
 }
 
@@ -734,6 +790,9 @@ const LOG_TABLE_COLUMNS = [
         <div className="tt-clock-cell">
           <span className="tt-clock-value">{row.clockedInDate}</span>
           <span className="tt-clock-value">{row.clockedInTime}</span>
+          {row.countedFromTime && (
+            <span className="tt-clock-counted-from">Counted from {row.countedFromTime}</span>
+          )}
         </div>
       ) : (
         <div className="tt-clock-cell">
@@ -883,12 +942,64 @@ function SummaryCard({ icon, iconClass, label, sub, value, valueClass }) {
   );
 }
 
+/**
+ * The employee's assigned work schedule, grouped so identical days show once
+ * (e.g. "Mon–Fri · 8:00 AM – 5:00 PM · Break 12:00 PM – 1:00 PM").
+ */
+function WorkScheduleCard({ schedule, weeklyHoursTarget }) {
+  if (!schedule || !schedule.days?.length) {
+    return (
+      <div className="tt-summary-schedule-card is-empty">
+        <p className="tt-summary-schedule-empty">
+          No work schedule assigned yet. Contact your admin.
+        </p>
+      </div>
+    );
+  }
+
+  const groups = groupScheduleDays(schedule.days);
+  const workingDayNumbers = schedule.days.map((d) => d.dayOfWeek);
+  const restDayNumbers = [1, 2, 3, 4, 5, 6, 7].filter((n) => !workingDayNumbers.includes(n));
+
+  return (
+    <div className="tt-summary-schedule-card">
+      <div className="tt-summary-schedule-head">
+        <span className="tt-summary-schedule-name">{schedule.modelName || "Work Schedule"}</span>
+        <span className="tt-summary-schedule-hours">{weeklyHoursTarget.toFixed(2)} hrs/week</span>
+      </div>
+
+      <ul className="tt-summary-schedule-list">
+        {groups.map((group) => (
+          <li key={group.dayNumbers.join("-")} className="tt-summary-schedule-row">
+            <span className="tt-summary-schedule-days">{summarizeScheduleDays(group.dayNumbers)}</span>
+            <span className="tt-summary-schedule-time">
+              {formatTimeDisplay(group.startTime)} – {formatTimeDisplay(group.endTime)}
+              {group.breakStart && (
+                <span className="tt-summary-schedule-break">
+                  Break {formatTimeDisplay(group.breakStart)} – {formatTimeDisplay(group.breakEnd)}
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+        {restDayNumbers.length > 0 && (
+          <li className="tt-summary-schedule-row is-rest">
+            <span className="tt-summary-schedule-days">{summarizeScheduleDays(restDayNumbers)}</span>
+            <span className="tt-summary-schedule-time">Rest day</span>
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function TimesheetSummary({
   weekRange,
   totalHours,
   regularHours,
   overtimeHours,
   weeklyHoursTarget,
+  schedule,
   workedDays,
   submissionStatus,
   remarks,
@@ -897,12 +1008,19 @@ function TimesheetSummary({
   isSubmissionLocked,
   submitting,
   onSubmit,
+  canRecall,
+  recalling,
+  onRecall,
 }) {
+  const [confirmRecall, setConfirmRecall] = useState(false);
   const periodLabel = `${weekRange.start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${weekRange.end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
 
   const statusLower = String(submissionStatus.statusName || "").toLowerCase();
   const pillLabel = !submissionStatus.hasSubmission ? "Not Submitted" : submissionStatus.statusName || "Submitted";
-  const canResubmit = submissionStatus.hasSubmission && (statusLower === "returned" || statusLower === "rejected");
+  // A recalled week is as editable as a returned one, so it offers Resubmit too.
+  const canResubmit =
+    submissionStatus.hasSubmission &&
+    (statusLower === "returned" || statusLower === "rejected" || statusLower === "recalled");
   const submitDisabled = submitting || !isRequestor || isSubmissionLocked;
   const submitLabel = submitting
     ? "Submitting..."
@@ -924,6 +1042,11 @@ function TimesheetSummary({
       </div>
 
       <div className="tt-summary-body">
+        <section className="tt-summary-section">
+          <h4 className="tt-summary-section-label">Work Schedule</h4>
+          <WorkScheduleCard schedule={schedule} weeklyHoursTarget={weeklyHoursTarget} />
+        </section>
+
         {/* Hours Breakdown */}
         <section className="tt-summary-section">
           <h4 className="tt-summary-section-label">Hours Breakdown</h4>
@@ -932,14 +1055,14 @@ function TimesheetSummary({
           <SummaryCard
             icon={faClock}
             label="Regular Hours"
-            sub={`Target: ${weeklyHoursTarget.toFixed(2)} hrs`}
+            sub={`Scheduled: ${weeklyHoursTarget.toFixed(2)} hrs`}
             value={`${regularHours.toFixed(2)} hrs`}
           />
           <SummaryCard
             icon={faBolt}
             iconClass="tt-summary-icon-overtime"
             label="Overtime"
-            sub="Hours beyond weekly target"
+            sub="After scheduled clock-out"
             value={`${overtimeHours.toFixed(2)} hrs`}
             valueClass="tt-summary-value-overtime"
           />
@@ -1027,6 +1150,26 @@ function TimesheetSummary({
           >
             {submitLabel}
           </button>
+          {canRecall && (
+            <>
+              <button
+                type="button"
+                className="tt-btn-recall"
+                disabled={recalling}
+                onClick={() => setConfirmRecall(true)}
+              >
+                {recalling ? "Recalling..." : "Recall Submission"}
+              </button>
+              <p className="tt-summary-recall-hint">
+                Need to fix something? Recall it before it&apos;s approved, then submit again.
+              </p>
+            </>
+          )}
+          {statusLower === "recalled" && (
+            <p className="tt-summary-recall-hint is-recalled">
+              You recalled this timesheet. Update your logs, then submit it again.
+            </p>
+          )}
           {!isRequestor && (
             <p className="tt-summary-warning">
               Requires the &quot;Timesheet Requestor - VA&quot; role to submit.
@@ -1034,6 +1177,38 @@ function TimesheetSummary({
           )}
         </div>
       </div>
+
+      {confirmRecall && (
+        <Modal
+          show
+          onHide={() => !recalling && setConfirmRecall(false)}
+          title="Recall this timesheet?"
+          footer={(
+            <>
+              <Button type="button" variant="ghost" onClick={() => setConfirmRecall(false)} disabled={recalling}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                loading={recalling}
+                onClick={async () => {
+                  await onRecall();
+                  setConfirmRecall(false);
+                }}
+              >
+                Recall
+              </Button>
+            </>
+          )}
+        >
+          <p className="tt-recall-confirm-text">
+            Your approvers won&apos;t be able to review it until you submit it again, and it
+            will start again from the first approval step. You&apos;ll be able to edit this
+            week&apos;s logs right away.
+          </p>
+        </Modal>
+      )}
     </aside>
   );
 }
@@ -1222,28 +1397,423 @@ function EditEntryModal({ row, onClose, onSave }) {
   );
 }
 
-// ─── Admin Setup: Employee Hours Targets ───────────────────────
+// ─── Admin Setup: Employee Hours (schedule model assignment) ─────
+
+function formatHours(value) {
+  return value == null ? "—" : `${Number(value).toFixed(2)} hrs`;
+}
 
 function EmployeeHoursSection() {
   const [rows, setRows] = useState([]);
+  const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [savingUserId, setSavingUserId] = useState(null);
+
+  const fetchAll = useCallback(
+    () => Promise.all([loadEmployeeHoursTargets(), loadScheduleModels()]),
+    [],
+  );
 
   const reload = useCallback(() => {
     setLoading(true);
-    loadEmployeeHoursTargets()
+    fetchAll()
+      .then(([employees, scheduleModels]) => {
+        setRows(employees);
+        setModels(scheduleModels);
+      })
+      .catch(() => toastError("Unable to load employee hours.", "Setup"))
+      .finally(() => setLoading(false));
+  }, [fetchAll]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAll()
+      .then(([employees, scheduleModels]) => {
+        if (cancelled) return;
+        setRows(employees);
+        setModels(scheduleModels);
+      })
+      .catch(() => {
+        if (!cancelled) toastError("Unable to load employee hours.", "Setup");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchAll]);
+
+  const handleAssign = useCallback(
+    async (row, nextModelId) => {
+      if (!nextModelId || Number(nextModelId) === row.model_id) return;
+      setSavingUserId(row.user_id);
+      try {
+        const result = await setUserScheduleModel(row.user_id, Number(nextModelId));
+        if (result.success) {
+          toastSuccess(`Updated ${row.name}'s schedule.`, "Setup");
+          reload();
+        } else {
+          toastError(result.error || "Failed to update.", "Setup");
+        }
+      } finally {
+        setSavingUserId(null);
+      }
+    },
+    [reload],
+  );
+
+  const columns = useMemo(() => {
+    // Only active models with at least one working day can be picked.
+    // A user already on an inactive model still sees it, marked, so the
+    // dropdown never shows the wrong value.
+    const pickable = models.filter((m) => m.is_active && m.days.length > 0);
+
+    return [
+      { key: "name", label: "Employee", minWidth: 220 },
+      {
+        key: "model_id",
+        label: "Schedule Model",
+        minWidth: 240,
+        render: (row) => {
+          const current = models.find((m) => m.model_id === row.model_id);
+          const showCurrentSeparately = current && !pickable.includes(current);
+          return (
+            <select
+              className="tt-modal-select tt-setup-model-select"
+              value={row.model_id ?? ""}
+              disabled={savingUserId === row.user_id || (!pickable.length && !current)}
+              onChange={(event) => handleAssign(row, event.target.value)}
+            >
+              {row.model_id == null && (
+                <option value="" disabled>
+                  {pickable.length ? "Not assigned — pick a model" : "No models set up yet"}
+                </option>
+              )}
+              {showCurrentSeparately && (
+                <option value={current.model_id} disabled>
+                  {current.model_name} (inactive)
+                </option>
+              )}
+              {pickable.map((m) => (
+                <option key={m.model_id} value={m.model_id}>
+                  {m.model_name} · {formatHours(m.weekly_hours)}
+                </option>
+              ))}
+            </select>
+          );
+        },
+      },
+      {
+        key: "weekly_hours_target",
+        label: "Weekly Hours",
+        minWidth: 140,
+        render: (row) => (
+          <span className={row.weekly_hours_target == null ? "tt-setup-muted" : ""}>
+            {formatHours(row.weekly_hours_target)}
+          </span>
+        ),
+      },
+    ];
+  }, [models, savingUserId, handleAssign]);
+
+  return (
+    <>
+      <p className="tt-setup-hint">
+        Pick a schedule model for each employee. Their weekly hours come from the model.
+        Employees can't clock in until they have a model.
+      </p>
+      <TableZ
+        data={rows}
+        columns={columns}
+        rowIdKey="user_id"
+        showActionColumn={false}
+        loading={loading}
+        loadingMessage="Loading employees..."
+        emptyMessage="No employees found for this module."
+        hideFooter
+      />
+    </>
+  );
+}
+
+// ─── Admin Setup: Schedule Models ────────────────────────────────
+
+/** One editable grid row per weekday; `working` false = rest day. */
+function buildEditorDays(savedDays) {
+  const byDay = new Map((savedDays || []).map((d) => [d.dayOfWeek, d]));
+  return SCHEDULE_DAYS.map(({ dayOfWeek }) => {
+    const saved = byDay.get(dayOfWeek);
+    return {
+      dayOfWeek,
+      working: Boolean(saved),
+      startTime: saved?.startTime || "",
+      breakStart: saved?.breakStart || "",
+      breakEnd: saved?.breakEnd || "",
+      endTime: saved?.endTime || "",
+    };
+  });
+}
+
+const TIME_FIELDS = ["startTime", "breakStart", "breakEnd", "endTime"];
+const TIME_FIELD_TO_RESOLVED = {
+  startTime: "start",
+  breakStart: "breakStart",
+  breakEnd: "breakEnd",
+  endTime: "end",
+};
+
+function ScheduleModelModal({ model, onClose, onSave }) {
+  const [modelCode, setModelCode] = useState(model?.model_code || "");
+  const [modelName, setModelName] = useState(model?.model_name || "");
+  const [displayOrder, setDisplayOrder] = useState(model?.display_order ?? 0);
+  const [days, setDays] = useState(() => buildEditorDays(model?.days));
+  const [saving, setSaving] = useState(false);
+
+  const updateDay = (dayOfWeek, patch) => {
+    setDays((prev) => prev.map((d) => (d.dayOfWeek === dayOfWeek ? { ...d, ...patch } : d)));
+  };
+
+  // Turning a day on copies the times from the closest earlier working day,
+  // so building Mon–Fri only means typing Monday.
+  const toggleWorking = (dayOfWeek, working) => {
+    setDays((prev) => {
+      const target = prev.find((d) => d.dayOfWeek === dayOfWeek);
+      const isBlank = TIME_FIELDS.every((f) => !target[f]);
+      let copyFrom = null;
+      if (working && isBlank) {
+        copyFrom = [...prev]
+          .reverse()
+          .find((d) => d.dayOfWeek < dayOfWeek && d.working && d.startTime && d.endTime)
+          || prev.find((d) => d.working && d.startTime && d.endTime);
+      }
+      return prev.map((d) => {
+        if (d.dayOfWeek !== dayOfWeek) return d;
+        if (!copyFrom) return { ...d, working };
+        return {
+          ...d,
+          working,
+          startTime: copyFrom.startTime,
+          breakStart: copyFrom.breakStart,
+          breakEnd: copyFrom.breakEnd,
+          endTime: copyFrom.endTime,
+        };
+      });
+    });
+  };
+
+  const copyFirstToAll = () => {
+    const source = days.find((d) => d.working && d.startTime && d.endTime);
+    if (!source) {
+      toastWarning("Fill in one working day first.", "Schedule Model");
+      return;
+    }
+    setDays((prev) =>
+      prev.map((d) =>
+        d.working
+          ? {
+              ...d,
+              startTime: source.startTime,
+              breakStart: source.breakStart,
+              breakEnd: source.breakEnd,
+              endTime: source.endTime,
+            }
+          : d,
+      ),
+    );
+  };
+
+  const workingDays = days.filter((d) => d.working);
+  const dayErrors = useMemo(
+    () => new Map(days.filter((d) => d.working).map((d) => [d.dayOfWeek, validateScheduleDay(d)])),
+    [days],
+  );
+  const hasErrors = [...dayErrors.values()].some(Boolean);
+  const weeklyHours = computeScheduledWeeklyHours(workingDays);
+
+  const handleSave = async () => {
+    if (!modelCode.trim() || !modelName.trim()) {
+      toastWarning("Enter a code and a name.", "Schedule Model");
+      return;
+    }
+    if (!workingDays.length) {
+      toastWarning("Pick at least one working day.", "Schedule Model");
+      return;
+    }
+    if (hasErrors) {
+      toastWarning("Fix the days marked in red first.", "Schedule Model");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onSave({
+        modelId: model?.model_id || null,
+        modelCode,
+        modelName,
+        displayOrder,
+        days: workingDays.map(({ dayOfWeek, startTime, breakStart, breakEnd, endTime }) => ({
+          dayOfWeek,
+          startTime,
+          breakStart,
+          breakEnd,
+          endTime,
+        })),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      show
+      onHide={onClose}
+      dialogClassName="tt-schedule-modal"
+      title={model ? "Edit Schedule Model" : "Add Schedule Model"}
+      footer={(
+        <>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" onClick={handleSave} loading={saving}>
+            Save
+          </Button>
+        </>
+      )}
+    >
+      <div className="tt-schedule-header-fields">
+        <label className="tt-modal-field">
+          <span className="tt-modal-label">Code</span>
+          <Input
+            value={modelCode}
+            onChange={(event) => setModelCode(event.target.value)}
+            placeholder="e.g. FULL_TIME_REGULAR"
+            maxLength={30}
+          />
+        </label>
+        <label className="tt-modal-field">
+          <span className="tt-modal-label">Name</span>
+          <Input
+            value={modelName}
+            onChange={(event) => setModelName(event.target.value)}
+            placeholder="e.g. Full Time (Regular)"
+            maxLength={50}
+          />
+        </label>
+        <label className="tt-modal-field tt-schedule-order-field">
+          <span className="tt-modal-label">Order</span>
+          <Input
+            type="number"
+            value={displayOrder}
+            onChange={(event) => setDisplayOrder(event.target.value)}
+          />
+        </label>
+      </div>
+
+      <div className="tt-schedule-grid-head">
+        <span className="tt-modal-label">Working Days</span>
+        <button type="button" className="tt-schedule-copy-btn" onClick={copyFirstToAll}>
+          Copy first day to all working days
+        </button>
+      </div>
+
+      <div className="tt-schedule-grid-scroll">
+        <table className="tt-schedule-grid">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Clock In</th>
+              <th>Break Start</th>
+              <th>Break End</th>
+              <th>Clock Out</th>
+              <th className="tt-schedule-hours-col">Hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            {days.map((day) => {
+              const meta = SCHEDULE_DAYS[day.dayOfWeek - 1];
+              const error = day.working ? dayErrors.get(day.dayOfWeek) : null;
+              const resolved = day.working && !error ? resolveScheduleDay(day) : null;
+              return (
+                <tr
+                  key={day.dayOfWeek}
+                  className={`${day.working ? "" : "is-rest"} ${error ? "has-error" : ""}`}
+                >
+                  <td>
+                    <label className="tt-schedule-day-toggle">
+                      <input
+                        type="checkbox"
+                        checked={day.working}
+                        onChange={(event) => toggleWorking(day.dayOfWeek, event.target.checked)}
+                      />
+                      <span>{meta.label}</span>
+                    </label>
+                  </td>
+                  {TIME_FIELDS.map((field) => {
+                    const nextDay = resolved?.[TIME_FIELD_TO_RESOLVED[field]] >= 24 * 60;
+                    return (
+                      <td key={field}>
+                        <input
+                          type="time"
+                          className="tt-modal-input tt-schedule-time"
+                          value={day[field]}
+                          disabled={!day.working}
+                          onChange={(event) => updateDay(day.dayOfWeek, { [field]: event.target.value })}
+                          aria-label={`${meta.label} ${field}`}
+                        />
+                        {nextDay && <span className="tt-schedule-nextday">next day</span>}
+                      </td>
+                    );
+                  })}
+                  <td className="tt-schedule-hours-col">
+                    {!day.working && <span className="tt-setup-muted">Rest day</span>}
+                    {day.working && error && <span className="tt-schedule-error">{error}</span>}
+                    {day.working && !error && computeScheduledDayHours(day).toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={5}>Weekly total</td>
+              <td className="tt-schedule-hours-col">{weeklyHours.toFixed(2)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <p className="tt-setup-hint tt-schedule-note">
+        Leave both break times empty for no break. For night shifts, a time earlier than the one
+        before it counts as the next day (e.g. Clock In 22:00, Clock Out 07:00).
+        Time before Clock In isn&apos;t counted. Work after Clock Out counts as overtime.
+      </p>
+    </Modal>
+  );
+}
+
+function ScheduleModelsSection() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modalModel, setModalModel] = useState(null); // null = closed, {} = new, row = editing
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    loadScheduleModels()
       .then((data) => setRows(data))
-      .catch(() => toastError("Unable to load employee hours targets.", "Setup"))
+      .catch(() => toastError("Unable to load schedule models.", "Setup"))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    loadEmployeeHoursTargets()
+    loadScheduleModels()
       .then((data) => {
         if (!cancelled) setRows(data);
       })
       .catch(() => {
-        if (!cancelled) toastError("Unable to load employee hours targets.", "Setup");
+        if (!cancelled) toastError("Unable to load schedule models.", "Setup");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1253,44 +1823,115 @@ function EmployeeHoursSection() {
     };
   }, []);
 
-  const columns = useMemo(
-    () => [
-      { key: "name", label: "Employee", minWidth: 220 },
-      {
-        key: "weekly_hours_target",
-        label: "Weekly Hours Target",
-        minWidth: 200,
-        render: (row) => (
-          <InlineEditCell
-            value={row.weekly_hours_target}
-            type="number"
-            onCommit={async (nextValue) => {
-              const result = await setUserWeeklyHoursTarget(row.user_id, nextValue);
-              if (result.success) {
-                toastSuccess(`Updated ${row.name}'s weekly target.`, "Setup");
-                reload();
-              } else {
-                toastError(result.error || "Failed to update.", "Setup");
-              }
-            }}
-          />
-        ),
-      },
-    ],
+  const handleToggleActive = useCallback(
+    async (row, nextActive) => {
+      const result = await setScheduleModelActive(row.model_id, nextActive);
+      if (result.success) {
+        toastSuccess(nextActive ? "Model restored." : "Model deactivated.", "Setup");
+        reload();
+      } else {
+        toastError(result.error || "Failed to update model.", "Setup");
+      }
+    },
     [reload],
   );
 
+  const columns = useMemo(
+    () => [
+      { key: "model_code", label: "Code", minWidth: 170 },
+      { key: "model_name", label: "Name", minWidth: 200 },
+      {
+        key: "days",
+        label: "Working Days",
+        minWidth: 160,
+        render: (row) =>
+          row.days.length ? (
+            summarizeScheduleDays(row.days.map((d) => d.dayOfWeek))
+          ) : (
+            <span className="tt-schedule-error">Not set up</span>
+          ),
+      },
+      {
+        key: "weekly_hours",
+        label: "Weekly Hours",
+        minWidth: 120,
+        align: "center",
+        render: (row) => Number(row.weekly_hours).toFixed(2),
+      },
+      { key: "employee_count", label: "Employees", minWidth: 100, align: "center" },
+      {
+        key: "is_active",
+        label: "Status",
+        minWidth: 110,
+        render: (row) => <StatusBadge status={row.is_active ? "active" : "inactive"} />,
+      },
+    ],
+    [],
+  );
+
+  const actions = useMemo(
+    () => [
+      { key: "edit", label: "Edit", icon: "pen", onClick: (row) => setModalModel(row) },
+      {
+        key: "deactivate",
+        label: "Deactivate",
+        icon: "ban",
+        type: "danger",
+        confirm: true,
+        confirmMessage: (row) => `Deactivate "${row.model_name}"?`,
+        visible: (row) => row.is_active,
+        onClick: (row) => handleToggleActive(row, false),
+      },
+      {
+        key: "restore",
+        label: "Restore",
+        icon: "rotate-left",
+        visible: (row) => !row.is_active,
+        onClick: (row) => handleToggleActive(row, true),
+      },
+    ],
+    [handleToggleActive],
+  );
+
   return (
-    <TableZ
-      data={rows}
-      columns={columns}
-      rowIdKey="user_id"
-      showActionColumn={false}
-      loading={loading}
-      loadingMessage="Loading employees..."
-      emptyMessage="No employees found for this module."
-      hideFooter
-    />
+    <>
+      <div className="tt-setup-toolbar">
+        <Button type="button" variant="primary" onClick={() => setModalModel({})}>
+          <FontAwesomeIcon icon={faPlus} /> Add Model
+        </Button>
+      </div>
+
+      <TableZ
+        data={rows}
+        columns={columns}
+        rowIdKey="model_id"
+        actions={actions}
+        loading={loading}
+        loadingMessage="Loading schedule models..."
+        emptyMessage="No schedule models yet. Add one to get started."
+        hideSearch
+        hideFooter
+      />
+
+      {modalModel && (
+        <ScheduleModelModal
+          model={modalModel.model_id ? modalModel : null}
+          onClose={() => setModalModel(null)}
+          onSave={async (formData) => {
+            const result = await saveScheduleModel(formData);
+            if (result.success) {
+              if (result.warning) toastWarning(result.warning, "Setup");
+              else toastSuccess("Schedule model saved.", "Setup");
+              setModalModel(null);
+              reload();
+            } else {
+              toastError(result.error || "Failed to save model.", "Setup");
+            }
+            return result;
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -1489,6 +2130,10 @@ function ApprovalActionModal({ mode, row, onClose, onSubmit }) {
   const [comments, setComments] = useState("");
   const [saving, setSaving] = useState(false);
   const isReturn = mode === "return";
+  // Returning an already-approved step undoes the approval, so the dialog
+  // says so plainly rather than looking like an ordinary Return.
+  const isUndoApproval =
+    isReturn && String(row?.stage_status_name || "").toLowerCase() === "approved";
   const canSubmit = !saving && (!isReturn || comments.trim().length > 0);
 
   const handleSubmit = async () => {
@@ -1505,7 +2150,13 @@ function ApprovalActionModal({ mode, row, onClose, onSubmit }) {
     <Modal
       show
       onHide={onClose}
-      title={isReturn ? "Return Timesheet" : "Approve Timesheet"}
+      title={
+        isUndoApproval
+          ? "Return Approved Timesheet"
+          : isReturn
+            ? "Return Timesheet"
+            : "Approve Timesheet"
+      }
       footer={(
         <>
           <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
@@ -1526,6 +2177,12 @@ function ApprovalActionModal({ mode, row, onClose, onSubmit }) {
       <p className="mb-2">
         {row.requestor_name}&apos;s timesheet for {row.week_start_date} – {row.week_end_date}
       </p>
+      {isUndoApproval && (
+        <p className="tt-approval-undo-warning">
+          This timesheet is already approved. Returning it undoes the approval and
+          unlocks the week so the employee can make changes and submit again.
+        </p>
+      )}
       <label className="tt-modal-field">
         <span className="tt-modal-label">{isReturn ? "Reason for return" : "Comment (optional)"}</span>
         <textarea
@@ -1743,7 +2400,7 @@ function ApprovalsPage() {
         key: "return",
         label: "Return",
         icon: "ban",
-        visible: (row) => row.is_actionable,
+        visible: (row) => Boolean(row.can_return),
         onClick: (row) => setActionModal({ mode: "return", row }),
       },
     ],
@@ -2207,6 +2864,13 @@ function AdminSetupPage() {
         </button>
         <button
           type="button"
+          className={`tt-setup-subtab ${subTab === "models" ? "active" : ""}`}
+          onClick={() => setSubTab("models")}
+        >
+          Schedule Models
+        </button>
+        <button
+          type="button"
           className={`tt-setup-subtab ${subTab === "reasons" ? "active" : ""}`}
           onClick={() => setSubTab("reasons")}
         >
@@ -2215,7 +2879,9 @@ function AdminSetupPage() {
       </div>
 
       <div className="tt-setup-content-scroll">
-        {subTab === "hours" ? <EmployeeHoursSection /> : <EditReasonsSection />}
+        {subTab === "hours" && <EmployeeHoursSection />}
+        {subTab === "models" && <ScheduleModelsSection />}
+        {subTab === "reasons" && <EditReasonsSection />}
       </div>
     </div>
   );
@@ -2287,6 +2953,7 @@ export default function TimeTrackerView({ initialData }) {
     overtimeHours,
     weeklyHoursTarget,
     hasHoursTarget,
+    schedule,
     refreshHoursTarget,
     clockedIn,
     lastClockIn,
@@ -2299,6 +2966,8 @@ export default function TimeTrackerView({ initialData }) {
     isSubmissionLocked,
     submittingTimesheet,
     handleSubmitTimesheet,
+    recallingTimesheet,
+    handleRecallTimesheet,
   } = useLogsPage(initialData, permissions);
 
   // Re-read the user's roles and weekly hours target from the server.
@@ -2414,6 +3083,7 @@ export default function TimeTrackerView({ initialData }) {
           regularHours={regularHours}
           overtimeHours={overtimeHours}
           weeklyHoursTarget={weeklyHoursTarget}
+          schedule={schedule}
           workedDays={workedDays}
           submissionStatus={submissionStatus}
           remarks={remarks}
@@ -2422,6 +3092,9 @@ export default function TimeTrackerView({ initialData }) {
           isSubmissionLocked={isSubmissionLocked}
           submitting={submittingTimesheet}
           onSubmit={handleSubmitTimesheet}
+          canRecall={Boolean(submissionStatus.canRecall)}
+          recalling={recallingTimesheet}
+          onRecall={handleRecallTimesheet}
         />
       )}
 

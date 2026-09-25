@@ -10,6 +10,11 @@ import { getTimeTrackerPermissions } from "./timeTracker.permissions";
 import {
   DEFAULT_LATE_DEADLINE,
   DEFAULT_GRACE_PERIOD,
+  SCHEDULE_DAYS,
+  computeLogHours,
+  computeScheduledWeeklyHours,
+  toHHMM,
+  validateScheduleDay,
 } from "./timeTracker.data";
 
 const STATUS_CLOCKED_IN = "CLOCKED_IN";
@@ -257,13 +262,6 @@ function timeStrInTz(date, timezone) {
   return `${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
-/** Hours between a date+time pair, rounded to 2 decimals */
-function diffHours(inDateStr, inTimeStr, outDateStr, outTimeStr) {
-  const start = new Date(`${inDateStr}T${inTimeStr}`);
-  const end = new Date(`${outDateStr}T${outTimeStr}`);
-  return Math.round(((end - start) / (1000 * 60 * 60)) * 100) / 100;
-}
-
 // ── Reads ────────────────────────────────────────────────────
 
 /**
@@ -280,6 +278,7 @@ const EMPTY_DATA = {
   orgRoles: [],
   weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
   hasHoursTarget: false,
+  schedule: null,
   clockedIn: false,
   openLogId: null,
   lastClockIn: null,
@@ -308,10 +307,11 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
 
   const supabase = getSupabaseAdmin();
 
-  let roles, orgRoles, weeklyHoursTarget, hasHoursTarget;
+  let roles, orgRoles, weeklyHoursTarget, hasHoursTarget, schedule;
   try {
     ({ roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId));
     ({ weeklyHoursTarget, hasHoursTarget } = await loadHoursTargetInfo(supabase, userId));
+    schedule = await loadUserScheduleModel(supabase, userId);
   } catch (err) {
     console.error("loadTimeTrackerData:", userId, err.message);
     return { ...EMPTY_DATA, status: "load-error" };
@@ -345,6 +345,7 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
     orgRoles,
     weeklyHoursTarget,
     hasHoursTarget,
+    schedule,
     clockedIn: Boolean(openLog),
     openLogId: openLog?.log_id ?? null,
     lastClockIn: openLog ? `${openLog.clock_in_date}T${openLog.clock_in_time}` : null,
@@ -368,18 +369,26 @@ export async function loadCurrentUserHoursTarget() {
     return {
       weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
       hasHoursTarget: false,
+      schedule: null,
       status: "no-session",
     };
   }
 
   try {
-    const result = await loadHoursTargetInfo(getSupabaseAdmin(), userId);
-    return { ...result, status: "ok" };
+    const supabase = getSupabaseAdmin();
+    // Both come from the same Setup screen, so refetching them together keeps
+    // the Summary card and the Clock In gate in step after an Admin edits them.
+    const [hoursResult, schedule] = await Promise.all([
+      loadHoursTargetInfo(supabase, userId),
+      loadUserScheduleModel(supabase, userId),
+    ]);
+    return { ...hoursResult, schedule, status: "ok" };
   } catch (err) {
     console.error("loadCurrentUserHoursTarget:", userId, err.message);
     return {
       weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
       hasHoursTarget: false,
+      schedule: null,
       status: "load-error",
     };
   }
@@ -471,7 +480,24 @@ export async function clockOut(logId, timezone) {
   const now = new Date();
   const clockOutDate = dateStrInTz(now, timezone);
   const clockOutTime = timeStrInTz(now, timezone);
-  const totalHours = diffHours(openLog.clock_in_date, openLog.clock_in_time, clockOutDate, clockOutTime);
+
+  let rulesByDay;
+  try {
+    rulesByDay = await loadScheduleRulesForUser(supabase, userId);
+  } catch (err) {
+    console.error("clockOut schedule error:", err.message);
+    return { success: false, error: "Unable to load your work schedule. Please try again." };
+  }
+
+  const { totalHours, overtimeHours } = computeLogHours(
+    {
+      clockInDate: openLog.clock_in_date,
+      clockInTime: openLog.clock_in_time,
+      clockOutDate,
+      clockOutTime,
+    },
+    rulesByDay,
+  );
 
   const { data, error } = await supabase
     .from("time_t_logs")
@@ -480,6 +506,7 @@ export async function clockOut(logId, timezone) {
       clock_out_date: clockOutDate,
       clock_out_time: clockOutTime,
       total_hours: totalHours,
+      overtime_hours: overtimeHours,
       updated_at: now.toISOString(),
       updated_by: userId,
     })
@@ -512,59 +539,404 @@ export async function loadEditReasons() {
   return data || [];
 }
 
-// ── Admin Setup: Employee Hours Targets ─────────────────────
+// ── Admin Setup: shared helpers ─────────────────────────────
 
-/** List every active platform user with their weekly hours target (defaulted to 40 if unset). */
+/**
+ * Confirm the caller is signed in AND is a Time Tracker Admin.
+ * Returns { userId, supabase } on success, or { error } to hand back to the UI.
+ */
+async function requireTimeTrackerAdmin() {
+  const userId = await getSessionUserId();
+  if (!userId) return { error: "Not authenticated." };
+
+  const supabase = getSupabaseAdmin();
+  const isAdmin = await checkIsTimeTrackerAdmin(supabase, userId);
+  if (!isAdmin) return { error: "Only Time Tracker admins can change setup." };
+
+  return { userId, supabase };
+}
+
+const MODEL_DAY_COLUMNS = "day_of_week, start_time, break_start, break_end, end_time";
+
+/** DB day row → the shape used by the UI and the shared helpers. */
+function mapModelDayRow(row) {
+  return {
+    dayOfWeek: Number(row.day_of_week),
+    startTime: toHHMM(row.start_time),
+    breakStart: toHHMM(row.break_start),
+    breakEnd: toHHMM(row.break_end),
+    endTime: toHHMM(row.end_time),
+  };
+}
+
+async function loadModelDays(supabase, modelId) {
+  const { data, error } = await supabase
+    .from("time_s_schedulemodelday")
+    .select(MODEL_DAY_COLUMNS)
+    .eq("model_id", modelId)
+    .order("day_of_week", { ascending: true });
+
+  if (error) throw new Error(`model days: ${describeError(error)}`);
+  return (data || []).map(mapModelDayRow);
+}
+
+/**
+ * The employee's assigned schedule model with its working days.
+ * Returns null when no model is assigned. Throws on a real database error.
+ */
+async function loadUserScheduleModel(supabase, userId) {
+  const { data, error } = await supabase
+    .from("time_m_userhourstarget")
+    .select("model_id, model:time_s_schedulemodel (model_code, model_name)")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .limit(1);
+
+  if (error) throw new Error(`schedule model: ${describeError(error)}`);
+  const row = data?.[0];
+  if (!row?.model_id) return null;
+
+  const days = await loadModelDays(supabase, row.model_id);
+  return {
+    modelId: row.model_id,
+    modelCode: row.model?.model_code ?? null,
+    modelName: row.model?.model_name ?? null,
+    days,
+  };
+}
+
+/**
+ * The employee's schedule as { [isoWeekday]: day }, for computeLogHours.
+ * Empty object = no model / no days → every day is treated as a rest day.
+ */
+async function loadScheduleRulesForUser(supabase, userId) {
+  const schedule = await loadUserScheduleModel(supabase, userId);
+  return Object.fromEntries((schedule?.days || []).map((day) => [day.dayOfWeek, day]));
+}
+
+// ── Admin Setup: Schedule Models ────────────────────────────
+
+/**
+ * Every schedule model (active and inactive) with its working days,
+ * scheduled weekly hours, and how many employees use it.
+ */
+export async function loadScheduleModels() {
+  const supabase = getSupabaseAdmin();
+
+  const [modelsRes, daysRes, assignmentsRes] = await Promise.all([
+    supabase
+      .from("time_s_schedulemodel")
+      .select("model_id, model_code, model_name, display_order, is_active")
+      .order("display_order", { ascending: true })
+      .order("model_name", { ascending: true }),
+    supabase
+      .from("time_s_schedulemodelday")
+      .select(`model_id, ${MODEL_DAY_COLUMNS}`)
+      .order("day_of_week", { ascending: true }),
+    supabase
+      .from("time_m_userhourstarget")
+      .select("model_id")
+      .eq("is_active", true),
+  ]);
+
+  const failed = modelsRes.error || daysRes.error || assignmentsRes.error;
+  if (failed) {
+    console.error("loadScheduleModels error:", describeError(failed));
+    throw new Error("Unable to load schedule models.");
+  }
+
+  const daysByModel = new Map();
+  for (const row of daysRes.data || []) {
+    if (!daysByModel.has(row.model_id)) daysByModel.set(row.model_id, []);
+    daysByModel.get(row.model_id).push(mapModelDayRow(row));
+  }
+
+  const employeesByModel = new Map();
+  for (const row of assignmentsRes.data || []) {
+    employeesByModel.set(row.model_id, (employeesByModel.get(row.model_id) || 0) + 1);
+  }
+
+  return (modelsRes.data || []).map((model) => {
+    const days = daysByModel.get(model.model_id) || [];
+    return {
+      model_id: model.model_id,
+      model_code: model.model_code,
+      model_name: model.model_name,
+      display_order: model.display_order,
+      is_active: model.is_active,
+      days,
+      weekly_hours: computeScheduledWeeklyHours(days),
+      employee_count: employeesByModel.get(model.model_id) || 0,
+    };
+  });
+}
+
+/**
+ * Create (modelId null) or update a schedule model and its working days.
+ *
+ * Business Rule:
+ * The days sent here are the COMPLETE list of working days — any weekday not
+ * included becomes a rest day. Existing day rows are replaced, and every
+ * employee on this model gets their weekly_hours_target refreshed so the
+ * Summary panel, PDF, and Approvals show the new scheduled hours.
+ *
+ * Note: Supabase JS has no multi-statement transaction, so everything is
+ * validated BEFORE the first write to keep partial saves unlikely.
+ */
+export async function saveScheduleModel({ modelId, modelCode, modelName, displayOrder, days }) {
+  const auth = await requireTimeTrackerAdmin();
+  if (auth.error) return { success: false, error: auth.error };
+  const { userId, supabase } = auth;
+
+  const code = String(modelCode || "").trim().toUpperCase().replace(/\s+/g, "_");
+  const name = String(modelName || "").trim();
+  const order = Number(displayOrder) || 0;
+
+  if (!code || !name) return { success: false, error: "Code and Name are required." };
+  if (code.length > 30) return { success: false, error: "Code must be 30 characters or less." };
+  if (name.length > 50) return { success: false, error: "Name must be 50 characters or less." };
+
+  // ── Validate every working day before writing anything ──
+  const inputDays = Array.isArray(days) ? days : [];
+  const seen = new Set();
+  const cleanDays = [];
+
+  for (const day of inputDays) {
+    const dayOfWeek = Number(day?.dayOfWeek);
+    const label = SCHEDULE_DAYS[dayOfWeek - 1]?.label;
+    if (!label) return { success: false, error: "One of the days is not valid." };
+    if (seen.has(dayOfWeek)) return { success: false, error: `${label} is listed twice.` };
+    seen.add(dayOfWeek);
+
+    const clean = {
+      dayOfWeek,
+      startTime: toHHMM(day.startTime),
+      breakStart: toHHMM(day.breakStart),
+      breakEnd: toHHMM(day.breakEnd),
+      endTime: toHHMM(day.endTime),
+    };
+    const dayError = validateScheduleDay(clean);
+    if (dayError) return { success: false, error: `${label}: ${dayError}` };
+    cleanDays.push(clean);
+  }
+
+  if (!cleanDays.length) {
+    return { success: false, error: "Pick at least one working day." };
+  }
+
+  // ── Save the model header ──
+  let savedModelId = modelId || null;
+  const now = new Date().toISOString();
+
+  if (savedModelId) {
+    const { error } = await supabase
+      .from("time_s_schedulemodel")
+      .update({
+        model_code: code,
+        model_name: name,
+        display_order: order,
+        updated_at: now,
+        updated_by: userId,
+      })
+      .eq("model_id", savedModelId);
+
+    if (error) {
+      console.error("saveScheduleModel update error:", describeError(error));
+      if (error.code === "23505") return { success: false, error: `The code "${code}" is already used.` };
+      return { success: false, error: "Failed to save the schedule model." };
+    }
+  } else {
+    const { data, error } = await supabase
+      .from("time_s_schedulemodel")
+      .insert({ model_code: code, model_name: name, display_order: order, created_by: userId })
+      .select("model_id")
+      .single();
+
+    if (error) {
+      console.error("saveScheduleModel insert error:", describeError(error));
+      if (error.code === "23505") return { success: false, error: `The code "${code}" is already used.` };
+      return { success: false, error: "Failed to create the schedule model." };
+    }
+    savedModelId = data.model_id;
+  }
+
+  // ── Replace the working days ──
+  const { error: deleteError } = await supabase
+    .from("time_s_schedulemodelday")
+    .delete()
+    .eq("model_id", savedModelId);
+
+  if (deleteError) {
+    console.error("saveScheduleModel delete days error:", describeError(deleteError));
+    return { success: false, error: "Saved the model, but failed to update its days. Please save again." };
+  }
+
+  const { error: insertDaysError } = await supabase.from("time_s_schedulemodelday").insert(
+    cleanDays.map((day) => ({
+      model_id: savedModelId,
+      day_of_week: day.dayOfWeek,
+      start_time: day.startTime,
+      break_start: day.breakStart || null,
+      break_end: day.breakEnd || null,
+      end_time: day.endTime,
+      created_by: userId,
+    })),
+  );
+
+  if (insertDaysError) {
+    console.error("saveScheduleModel insert days error:", describeError(insertDaysError));
+    return { success: false, error: "Saved the model, but failed to save its days. Please save again." };
+  }
+
+  // ── Keep assigned employees' weekly targets in step with the schedule ──
+  const weeklyHours = computeScheduledWeeklyHours(cleanDays);
+  const { error: syncError } = await supabase
+    .from("time_m_userhourstarget")
+    .update({ weekly_hours_target: weeklyHours, updated_at: now, updated_by: userId })
+    .eq("model_id", savedModelId);
+
+  if (syncError) {
+    // The model itself saved fine — only the employees' weekly totals are stale.
+    console.error("saveScheduleModel target sync error:", describeError(syncError));
+    return {
+      success: true,
+      modelId: savedModelId,
+      warning: "Model saved, but employees' weekly hours didn't refresh. Save again to retry.",
+    };
+  }
+
+  return { success: true, modelId: savedModelId };
+}
+
+/**
+ * Activate or deactivate a schedule model.
+ * A model still assigned to employees can't be deactivated — move them first,
+ * so nobody is left on a schedule that no longer shows in the dropdown.
+ */
+export async function setScheduleModelActive(modelId, isActive) {
+  const auth = await requireTimeTrackerAdmin();
+  if (auth.error) return { success: false, error: auth.error };
+  const { userId, supabase } = auth;
+
+  if (!isActive) {
+    const { count, error: countError } = await supabase
+      .from("time_m_userhourstarget")
+      .select("target_id", { count: "exact", head: true })
+      .eq("model_id", modelId)
+      .eq("is_active", true);
+
+    if (countError) {
+      console.error("setScheduleModelActive count error:", describeError(countError));
+      return { success: false, error: "Unable to check who uses this model." };
+    }
+    if (count > 0) {
+      return {
+        success: false,
+        error: `${count} employee${count === 1 ? " uses" : "s use"} this model. Move them to another model first.`,
+      };
+    }
+  }
+
+  const { error } = await supabase
+    .from("time_s_schedulemodel")
+    .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString(), updated_by: userId })
+    .eq("model_id", modelId);
+
+  if (error) {
+    console.error("setScheduleModelActive error:", describeError(error));
+    return { success: false, error: "Failed to update the model's status." };
+  }
+  return { success: true };
+}
+
+// ── Admin Setup: Employee Hours (model assignment) ──────────
+
+/**
+ * Every active platform user with their assigned schedule model.
+ * Users with no row yet come back with model_id null ("Not assigned").
+ */
 export async function loadEmployeeHoursTargets() {
   const supabase = getSupabaseAdmin();
 
-  const [{ data: users }, { data: targets }] = await Promise.all([
+  const [usersRes, targetsRes] = await Promise.all([
     supabase
       .from("psb_s_user")
       .select("user_id, first_name, last_name, username")
       .eq("is_active", true),
     supabase
       .from("time_m_userhourstarget")
-      .select("user_id, weekly_hours_target")
-      .eq("is_active", true),
+      .select("user_id, model_id, weekly_hours_target, updated_at")
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false, nullsFirst: false }),
   ]);
 
-  const targetByUser = new Map((targets || []).map((t) => [t.user_id, t]));
+  const failed = usersRes.error || targetsRes.error;
+  if (failed) {
+    console.error("loadEmployeeHoursTargets error:", describeError(failed));
+    throw new Error("Unable to load employee hours.");
+  }
 
-  return (users || [])
+  // Rows are newest-first, so the first row seen per user is the current one.
+  const targetByUser = new Map();
+  for (const t of targetsRes.data || []) {
+    if (!targetByUser.has(t.user_id)) targetByUser.set(t.user_id, t);
+  }
+
+  return (usersRes.data || [])
     .map((u) => {
       const target = targetByUser.get(u.user_id);
       const name = `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username;
       return {
         user_id: u.user_id,
         name,
-        weekly_hours_target: target ? Number(target.weekly_hours_target) : DEFAULT_WEEKLY_HOURS_TARGET,
+        model_id: target?.model_id ?? null,
+        weekly_hours_target: target ? Number(target.weekly_hours_target) : null,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
- * Create or update a user's weekly hours target.
+ * Assign a schedule model to an employee.
  *
  * Business Rule:
- * A user should only ever have one active target row. This used `.maybeSingle()`
- * to check for an existing row, which fails whenever duplicates already exist —
- * `existing` became null and the code inserted *another* duplicate, making the
- * problem worse each time an admin saved. Reading the most recently updated row
- * (same approach as `loadHoursTargetInfo`) means an existing row is always found
- * and updated, so saving can no longer add duplicates.
+ * The weekly hours target is no longer typed in by hand — it is the model's
+ * total scheduled hours. It's stored on the user's row so the Summary panel,
+ * PDF, and Approvals keep reading the same column they always have.
+ * Creating this row is also what unlocks Clock In for a new employee.
  */
-export async function setUserWeeklyHoursTarget(targetUserId, hours) {
-  const userId = await getSessionUserId();
-  if (!userId) return { success: false, error: "Not authenticated." };
+export async function setUserScheduleModel(targetUserId, modelId) {
+  const auth = await requireTimeTrackerAdmin();
+  if (auth.error) return { success: false, error: auth.error };
+  const { userId, supabase } = auth;
 
-  const numericHours = Number(hours);
-  if (!Number.isFinite(numericHours) || numericHours <= 0) {
-    return { success: false, error: "Enter a valid weekly hours target." };
+  const { data: model, error: modelError } = await supabase
+    .from("time_s_schedulemodel")
+    .select("model_id, model_name, is_active")
+    .eq("model_id", modelId)
+    .maybeSingle();
+
+  if (modelError) {
+    console.error("setUserScheduleModel model error:", describeError(modelError));
+    return { success: false, error: "Unable to load that schedule model." };
+  }
+  if (!model) return { success: false, error: "That schedule model no longer exists." };
+  if (!model.is_active) return { success: false, error: `"${model.model_name}" is inactive.` };
+
+  let days;
+  try {
+    days = await loadModelDays(supabase, model.model_id);
+  } catch (err) {
+    console.error("setUserScheduleModel days error:", err.message);
+    return { success: false, error: "Unable to load that model's working days." };
+  }
+  if (!days.length) {
+    return { success: false, error: `"${model.model_name}" has no working days yet. Set them up in Schedule Models.` };
   }
 
-  const supabase = getSupabaseAdmin();
+  const weeklyHours = computeScheduledWeeklyHours(days);
+  const now = new Date().toISOString();
 
   const { data: existingRows, error: lookupError } = await supabase
     .from("time_m_userhourstarget")
@@ -574,43 +946,43 @@ export async function setUserWeeklyHoursTarget(targetUserId, hours) {
     .limit(1);
 
   if (lookupError) {
-    console.error("setUserWeeklyHoursTarget lookup error:", describeError(lookupError));
-    return { success: false, error: "Failed to look up the current hours target." };
+    console.error("setUserScheduleModel lookup error:", describeError(lookupError));
+    return { success: false, error: "Failed to look up the employee's current schedule." };
   }
 
-  // The first row is the most recently updated one, so updating it keeps the
-  // newest value the admin just typed.
   const existing = existingRows?.[0];
 
   if (existing) {
     const { error } = await supabase
       .from("time_m_userhourstarget")
       .update({
-        weekly_hours_target: numericHours,
+        model_id: model.model_id,
+        weekly_hours_target: weeklyHours,
         is_active: true,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
         updated_by: userId,
       })
       .eq("target_id", existing.target_id);
 
     if (error) {
-      console.error("setUserWeeklyHoursTarget update error:", describeError(error));
-      return { success: false, error: "Failed to update hours target." };
+      console.error("setUserScheduleModel update error:", describeError(error));
+      return { success: false, error: "Failed to assign the schedule model." };
     }
-    return { success: true };
+    return { success: true, weeklyHours };
   }
 
   const { error } = await supabase.from("time_m_userhourstarget").insert({
     user_id: targetUserId,
-    weekly_hours_target: numericHours,
+    model_id: model.model_id,
+    weekly_hours_target: weeklyHours,
     created_by: userId,
   });
 
   if (error) {
-    console.error("setUserWeeklyHoursTarget insert error:", describeError(error));
-    return { success: false, error: "Failed to set hours target." };
+    console.error("setUserScheduleModel insert error:", describeError(error));
+    return { success: false, error: "Failed to assign the schedule model." };
   }
-  return { success: true };
+  return { success: true, weeklyHours };
 }
 
 // ── Admin Setup: Edit Reasons ────────────────────────────────
@@ -771,12 +1143,35 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
   }
 
   const statusId = await getStatusId(supabase, hasClockOut ? STATUS_CLOCKED_OUT : STATUS_CLOCKED_IN);
-  const totalHours = hasClockOut
-    ? diffHours(clockInDate, `${clockInTime}:00`, clockOutDate, `${clockOutTime}:00`)
-    : null;
 
-  if (hasClockOut && totalHours < 0) {
-    return { success: false, error: "Clock Out must be after Clock In." };
+  let totalHours = null;
+  let overtimeHours = 0;
+
+  if (hasClockOut) {
+    let rulesByDay;
+    try {
+      rulesByDay = await loadScheduleRulesForUser(supabase, userId);
+    } catch (err) {
+      console.error("saveTimeLogEntry schedule error:", err.message);
+      return { success: false, error: "Unable to load your work schedule. Please try again." };
+    }
+
+    const hours = computeLogHours(
+      {
+        clockInDate,
+        clockInTime: `${clockInTime}:00`,
+        clockOutDate,
+        clockOutTime: `${clockOutTime}:00`,
+      },
+      rulesByDay,
+    );
+
+    // Check the raw span, not the net hours: net is clamped at 0.
+    if (hours.grossHours < 0) {
+      return { success: false, error: "Clock Out must be after Clock In." };
+    }
+    totalHours = hours.totalHours;
+    overtimeHours = hours.overtimeHours;
   }
 
   const payload = {
@@ -786,6 +1181,7 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
     clock_out_date: hasClockOut ? clockOutDate : null,
     clock_out_time: hasClockOut ? `${clockOutTime}:00` : null,
     total_hours: totalHours,
+    overtime_hours: overtimeHours,
     edit_reason_id: reasonId,
     notes: notes || null,
     updated_at: new Date().toISOString(),
@@ -823,6 +1219,13 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
 
 const WORKFLOW_STATUS_PENDING = "Pending";
 
+/**
+ * Set when an employee pulls a submission back for editing before any
+ * approver has looked at it. The week unlocks so they can fix their logs and
+ * submit again, rather than waiting to be Returned.
+ */
+const WORKFLOW_STATUS_RECALLED = "Recalled";
+
 /** Look up a workflow status_id by name (wfk_s_status). */
 async function getWorkflowStatusId(supabase, statusName) {
   const { data, error } = await supabase
@@ -847,7 +1250,7 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     return {
       hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
       approverName: null, approverRoleName: null,
-      lastActionComment: null, lastActionByName: null,
+      lastActionComment: null, lastActionByName: null, canRecall: false,
     };
   }
 
@@ -864,13 +1267,13 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     return {
       hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
       approverName: null, approverRoleName: null,
-      lastActionComment: null, lastActionByName: null,
+      lastActionComment: null, lastActionByName: null, canRecall: false,
     };
   }
 
   const { data: instance } = await supabase
     .from("wfk_t_workflowinstance")
-    .select("instance_id, status_id, current_wfs_id")
+    .select("instance_id, status_id, current_wfs_id, wf_id")
     .eq("app_id", TIME_TRACKER_APP_ID)
     .eq("document_id", submission.submission_id)
     .maybeSingle();
@@ -884,6 +1287,11 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
       .maybeSingle();
     statusName = status?.status_name || null;
   }
+
+  // Recall is offered until the timesheet is fully approved, at any stage.
+  // Once approved, only an approver can undo it (by returning it).
+  const canRecall =
+    String(statusName || "").toLowerCase() === WORKFLOW_STATUS_PENDING.toLowerCase();
 
   let approverName = null;
   let approverRoleName = null;
@@ -969,6 +1377,7 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     approverRoleName,
     lastActionComment,
     lastActionByName,
+    canRecall,
   };
 }
 
@@ -1013,15 +1422,17 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
 
   const { data: logs } = await supabase
     .from("time_t_logs")
-    .select("total_hours")
+    .select("total_hours, overtime_hours")
     .eq("user_id", userId)
     .gte("clock_in_date", weekStartDate)
     .lte("clock_in_date", weekEndDate);
 
-  const totalHours = (logs || []).reduce((sum, l) => sum + (Number(l.total_hours) || 0), 0);
-  const { weeklyHoursTarget } = await loadHoursTargetInfo(supabase, userId);
-  const regularHours = Math.min(totalHours, weeklyHoursTarget);
-  const overtimeHours = Math.max(totalHours - weeklyHoursTarget, 0);
+  // Overtime is now per-log (time after the scheduled clock-out), not derived
+  // from the weekly target, so these are summed straight from the logs.
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const totalHours = round2((logs || []).reduce((sum, l) => sum + (Number(l.total_hours) || 0), 0));
+  const overtimeHours = round2((logs || []).reduce((sum, l) => sum + (Number(l.overtime_hours) || 0), 0));
+  const regularHours = round2(totalHours - overtimeHours);
 
   const { data: workflow, error: workflowError } = await supabase
     .from("wfk_s_workflow")
@@ -1185,6 +1596,116 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
   }
 
   return { success: true, record: submission };
+}
+
+/**
+ * Recall the signed-in employee's own submitted timesheet for a week.
+ *
+ * Business Rule:
+ * Allowed while the timesheet is Pending at ANY stage, so an employee can still
+ * pull it back after an earlier approver has reviewed it but before the final
+ * one. Blocked once it is Approved — only an approver can undo that, by
+ * returning it. The week then unlocks so the employee can fix their logs and
+ * submit again, which restarts the approval from the first stage.
+ *
+ * The stage update is conditional on `acted_by is null`, so if an approver
+ * acts at the same moment, only one of the two wins.
+ *
+ * @param {Object} params
+ * @param {string} params.weekStartDate - "YYYY-MM-DD" (Monday).
+ */
+export async function recallTimesheet({ weekStartDate }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: submission, error: submissionError } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("submission_id")
+    .eq("user_id", userId)
+    .eq("week_start_date", weekStartDate)
+    .maybeSingle();
+
+  if (submissionError) {
+    console.error("recallTimesheet submission error:", describeError(submissionError));
+    return { success: false, error: "Unable to load your timesheet. Please try again." };
+  }
+  if (!submission) return { success: false, error: "There is no submitted timesheet for this week." };
+
+  const { data: instance, error: instanceError } = await supabase
+    .from("wfk_t_workflowinstance")
+    .select("instance_id, status_id, current_wfs_id, wf_id")
+    .eq("app_id", TIME_TRACKER_APP_ID)
+    .eq("document_id", submission.submission_id)
+    .maybeSingle();
+
+  if (instanceError || !instance) {
+    if (instanceError) console.error("recallTimesheet instance error:", describeError(instanceError));
+    return { success: false, error: "Unable to find the approval request for this week." };
+  }
+
+  let pendingStatusId;
+  let recalledStatusId;
+  try {
+    [pendingStatusId, recalledStatusId] = await Promise.all([
+      getWorkflowStatusId(supabase, WORKFLOW_STATUS_PENDING),
+      getWorkflowStatusId(supabase, WORKFLOW_STATUS_RECALLED),
+    ]);
+  } catch (err) {
+    console.error("recallTimesheet setup error:", err.message);
+    return { success: false, error: "Recall isn't available right now. Please contact your admin." };
+  }
+
+  if (instance.status_id !== pendingStatusId) {
+    return { success: false, error: "Only a timesheet that hasn't been approved yet can be recalled." };
+  }
+
+  const now = new Date().toISOString();
+
+  // Conditional: only if nobody has acted on this step yet.
+  const { data: recalledRows, error: stageError } = await supabase
+    .from("wfk_t_stageinstance")
+    .update({
+      status_id: recalledStatusId,
+      acted_at: now,
+      acted_by: userId,
+      comments: null,
+      is_active: false,
+    })
+    .eq("instance_id", instance.instance_id)
+    .eq("wfs_id", instance.current_wfs_id)
+    .is("acted_by", null)
+    .select("stageinstance_id");
+
+  if (stageError) {
+    console.error("recallTimesheet stage error:", describeError(stageError));
+    return { success: false, error: "Failed to recall the timesheet. Please try again." };
+  }
+  if (!recalledRows?.length) {
+    return {
+      success: false,
+      error: "An approver just acted on this timesheet. Refresh to see the latest status.",
+    };
+  }
+
+  // Conditional on the status still being Pending, so a recall can't overwrite
+  // a status that changed (e.g. an approver approved it) while we were working.
+  const { error: updateInstanceError } = await supabase
+    .from("wfk_t_workflowinstance")
+    .update({ status_id: recalledStatusId, completed_at: null })
+    .eq("instance_id", instance.instance_id)
+    .eq("status_id", pendingStatusId);
+
+  if (updateInstanceError) {
+    console.error("recallTimesheet instance update error:", describeError(updateInstanceError));
+    return {
+      success: false,
+      error: "Recorded the recall, but failed to update the overall status. Please try again.",
+    };
+  }
+
+  return { success: true };
 }
 
 // ── Timesheets (Admin) ──────────────────────────────────────
@@ -1450,6 +1971,11 @@ export async function loadApprovalQueue(weekStartDate) {
         stage_name: stageById.get(si.wfs_id)?.stage_name || "--",
         stage_status_name: stageStatusById.get(si.status_id) || "--",
         is_actionable: si.acted_by === null,
+        // Return is offered while a step waits for review, and also on the
+        // step that gave the final approval so an approver can undo it.
+        can_return:
+          si.acted_by === null ||
+          String(stageStatusById.get(si.status_id) || "").toLowerCase() === "approved",
         acted_at: si.acted_at,
         comments: si.comments,
       };
@@ -1572,7 +2098,18 @@ export async function approveTimesheetStage(stageinstanceId, comments) {
   return { success: true };
 }
 
-/** Return the given stage instance to the requestor. Requires a comment. */
+/**
+ * Return a stage instance to the requestor. Requires a comment.
+ *
+ * Business Rule:
+ * Normally a step is returned while it is still waiting for review. But a step
+ * that was the FINAL approval can also be returned, which undoes the approval:
+ * the request goes back to Returned and the employee can edit and resubmit.
+ * Anything else (already returned, or recalled by the employee) is refused.
+ *
+ * The update is conditional on the state we expect, so if the timesheet
+ * changes while the approver has the dialog open, nothing is written.
+ */
 export async function returnTimesheetStage(stageinstanceId, comments) {
   const userId = await getSessionUserId();
   if (!userId) return { success: false, error: "Not authenticated." };
@@ -1588,7 +2125,20 @@ export async function returnTimesheetStage(stageinstanceId, comments) {
     .eq("stageinstance_id", stageinstanceId)
     .maybeSingle();
   if (siError || !stageInstance) return { success: false, error: "Approval step not found." };
-  if (stageInstance.acted_by) return { success: false, error: "This step has already been acted on." };
+
+  const [returnedStatusId, approvedStatusId] = await Promise.all([
+    getWorkflowStatusId(supabase, "Returned"),
+    getWorkflowStatusId(supabase, "Approved"),
+  ]);
+
+  // Business Rule: a step can be returned while it's still waiting for review,
+  // OR after it was the final approval (to undo an approval). Anything else
+  // (already returned, recalled by the employee) can't be returned.
+  const isAwaitingReview = !stageInstance.acted_by;
+  const isFinalApproved = stageInstance.status_id === approvedStatusId;
+  if (!isAwaitingReview && !isFinalApproved) {
+    return { success: false, error: "This step has already been acted on." };
+  }
 
   const { data: participant } = await supabase
     .from("wfk_m_stageparticipant")
@@ -1607,21 +2157,33 @@ export async function returnTimesheetStage(stageinstanceId, comments) {
     .maybeSingle();
   if (!userOrgRole) return { success: false, error: "You are not authorized to act on this stage." };
 
-  const returnedStatusId = await getWorkflowStatusId(supabase, "Returned");
   const now = new Date().toISOString();
 
-  const { error: updateSiError } = await supabase
+  // Conditional on the state we checked above, so a change made while the
+  // approver had the dialog open (e.g. the employee recalled it) is detected.
+  let stageUpdate = supabase
     .from("wfk_t_stageinstance")
     .update({ status_id: returnedStatusId, acted_at: now, acted_by: userId, comments: trimmedComments, is_active: true })
     .eq("stageinstance_id", stageinstanceId);
+
+  stageUpdate = isAwaitingReview
+    ? stageUpdate.is("acted_by", null)
+    : stageUpdate.eq("status_id", approvedStatusId);
+
+  const { data: returnedRows, error: updateSiError } = await stageUpdate.select("stageinstance_id");
+
   if (updateSiError) {
     console.error("returnTimesheetStage update stage instance error:", describeError(updateSiError));
     return { success: false, error: "Failed to record the return." };
   }
+  if (!returnedRows?.length) {
+    return { success: false, error: "This timesheet changed while you were reviewing it. Refresh and try again." };
+  }
 
+  // Undo the approval: clear completed_at so the request is live again.
   const { error: updateInstanceError } = await supabase
     .from("wfk_t_workflowinstance")
-    .update({ status_id: returnedStatusId })
+    .update({ status_id: returnedStatusId, completed_at: null })
     .eq("instance_id", stageInstance.instance_id);
   if (updateInstanceError) {
     console.error("returnTimesheetStage update instance error:", describeError(updateInstanceError));

@@ -64,3 +64,250 @@ export function createAttendanceFormFromRow(row) {
     notes: row.notes || "",
   };
 }
+
+// ─── Schedule Models ─────────────────────────────────────────
+//
+// Shared by the Setup UI (live preview + validation) and the server actions
+// (final validation + weekly hours), so both always agree.
+//
+// Business Rule:
+// A model day stores times only, never dates, because the same model is
+// reused every week. Times are read in order — start, break start, break end,
+// end — and any time earlier than the one before it belongs to the NEXT day.
+// That is how a night shift like 22:00 → 07:00 works without storing dates.
+
+const MINUTES_PER_DAY = 24 * 60;
+
+/** ISO weekdays, matching time_s_schedulemodelday.day_of_week (1 = Monday). */
+export const SCHEDULE_DAYS = [
+  { dayOfWeek: 1, label: "Monday", short: "Mon" },
+  { dayOfWeek: 2, label: "Tuesday", short: "Tue" },
+  { dayOfWeek: 3, label: "Wednesday", short: "Wed" },
+  { dayOfWeek: 4, label: "Thursday", short: "Thu" },
+  { dayOfWeek: 5, label: "Friday", short: "Fri" },
+  { dayOfWeek: 6, label: "Saturday", short: "Sat" },
+  { dayOfWeek: 7, label: "Sunday", short: "Sun" },
+];
+
+/** "8:00", "08:00" or "08:00:00" → "08:00". Anything else → "". */
+export function toHHMM(value) {
+  if (!value) return "";
+  const match = String(value).match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return "";
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return "";
+  return `${String(hours).padStart(2, "0")}:${match[2]}`;
+}
+
+function toMinutes(hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * Put a day's times on one timeline, in minutes from midnight of the
+ * clock-in day. A value of 1440 or more means "the next day".
+ * Missing break times come back as null.
+ */
+export function resolveScheduleDay({ startTime, breakStart, breakEnd, endTime }) {
+  let dayOffset = 0;
+  let previous = null;
+
+  const [start, bStart, bEnd, end] = [startTime, breakStart, breakEnd, endTime].map((raw) => {
+    const hhmm = toHHMM(raw);
+    if (!hhmm) return null;
+    let value = toMinutes(hhmm) + dayOffset;
+    if (previous != null && value < previous) {
+      dayOffset += MINUTES_PER_DAY;
+      value += MINUTES_PER_DAY;
+    }
+    previous = value;
+    return value;
+  });
+
+  return { start, breakStart: bStart, breakEnd: bEnd, end };
+}
+
+/** Returns a short, plain-language error for one working day, or null if it's valid. */
+export function validateScheduleDay(day) {
+  const startTime = toHHMM(day?.startTime);
+  const endTime = toHHMM(day?.endTime);
+  const breakStart = toHHMM(day?.breakStart);
+  const breakEnd = toHHMM(day?.breakEnd);
+
+  if (!startTime || !endTime) return "Enter a start and end time.";
+  if (Boolean(breakStart) !== Boolean(breakEnd)) {
+    return "Enter both break times, or leave both empty.";
+  }
+
+  const r = resolveScheduleDay({ startTime, breakStart, breakEnd, endTime });
+
+  if (breakStart) {
+    if (!(r.start < r.breakStart && r.breakStart < r.breakEnd && r.breakEnd < r.end)) {
+      return "Times must go in order: start, break start, break end, end.";
+    }
+  } else if (!(r.start < r.end)) {
+    return "End time must be after the start time.";
+  }
+
+  if (r.end - r.start > MINUTES_PER_DAY) {
+    return "These times add up to more than 24 hours. Check that they go in order: start, break start, break end, end.";
+  }
+  return null;
+}
+
+/** Scheduled working hours for one day (shift minus break). 0 if the day is invalid. */
+export function computeScheduledDayHours(day) {
+  if (validateScheduleDay(day)) return 0;
+  const r = resolveScheduleDay(day);
+  const breakMinutes = r.breakStart != null ? r.breakEnd - r.breakStart : 0;
+  return Math.round(((r.end - r.start - breakMinutes) / 60) * 100) / 100;
+}
+
+/** Total scheduled hours for a model's working days. */
+export function computeScheduledWeeklyHours(days) {
+  const total = (days || []).reduce((sum, day) => sum + computeScheduledDayHours(day), 0);
+  return Math.round(total * 100) / 100;
+}
+
+/** [1,2,3,4,5,7] → "Mon–Fri, Sun" */
+export function summarizeScheduleDays(dayNumbers) {
+  const sorted = [...new Set(dayNumbers || [])].sort((a, b) => a - b);
+  if (!sorted.length) return "No working days";
+
+  const shortOf = (n) => SCHEDULE_DAYS[n - 1]?.short || String(n);
+  const groups = [];
+  let runStart = sorted[0];
+  let runEnd = sorted[0];
+
+  for (let i = 1; i <= sorted.length; i += 1) {
+    const n = sorted[i];
+    if (n === runEnd + 1) {
+      runEnd = n;
+      continue;
+    }
+    if (runStart === runEnd) groups.push(shortOf(runStart));
+    else if (runEnd === runStart + 1) groups.push(`${shortOf(runStart)}, ${shortOf(runEnd)}`);
+    else groups.push(`${shortOf(runStart)}–${shortOf(runEnd)}`);
+    runStart = n;
+    runEnd = n;
+  }
+  return groups.join(", ");
+}
+
+/**
+ * Hours for one clocked-out log, using the employee's schedule model.
+ *
+ * Business Rule:
+ * - The schedule row used is the one for the clock-in date's weekday.
+ * - Only the part of the break the person was clocked in for is removed.
+ * - Overtime = time worked after the scheduled clock-out (daily only).
+ * - Time before the scheduled clock-in is not counted; hours start at the
+ *   scheduled clock-in.
+ * - Rest day or unusable schedule row: everything is regular, no break.
+ *
+ * All math is in minutes from midnight of the clock-in date, so night
+ * shifts that end the next day work the same as day shifts.
+ *
+ * @param {{clockInDate:string, clockInTime:string, clockOutDate:string, clockOutTime:string}} log
+ *   dates "YYYY-MM-DD", times "HH:MM" or "HH:MM:SS"
+ * @param {Record<number, {startTime:string, breakStart:string, breakEnd:string, endTime:string}>} rulesByDay
+ *   keyed by ISO weekday (1 = Monday)
+ * @returns {{grossHours:number, totalHours:number, overtimeHours:number}}
+ *   grossHours can be negative (clock-out before clock-in) so callers can reject it.
+ */
+export function computeLogHours({ clockInDate, clockInTime, clockOutDate, clockOutTime }, rulesByDay) {
+  const toMin = (value) => {
+    const [h = 0, m = 0, s = 0] = String(value || "").split(":").map(Number);
+    return h * 60 + m + s / 60;
+  };
+  const daysBetween = (from, to) => {
+    const [y1, m1, d1] = from.split("-").map(Number);
+    const [y2, m2, d2] = to.split("-").map(Number);
+    return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+  };
+  const isoWeekday = (dateStr) => {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    return day === 0 ? 7 : day;
+  };
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  const inMin = toMin(clockInTime);
+  const outMin = daysBetween(clockInDate, clockOutDate) * MINUTES_PER_DAY + toMin(clockOutTime);
+  const grossMin = outMin - inMin;
+
+  if (grossMin < 0) return { grossHours: round2(grossMin / 60), totalHours: 0, overtimeHours: 0 };
+
+  const rule = rulesByDay?.[isoWeekday(clockInDate)];
+  if (!rule || validateScheduleDay(rule)) {
+    return { grossHours: round2(grossMin / 60), totalHours: round2(grossMin / 60), overtimeHours: 0 };
+  }
+
+  const shift = resolveScheduleDay(rule);
+
+  // Early clock-in isn't paid: counting starts at the scheduled clock-in.
+  const countedInMin = Math.max(inMin, shift.start);
+  const countedMin = Math.max(outMin - countedInMin, 0);
+
+  const breakMin = shift.breakStart != null
+    ? Math.max(Math.min(outMin, shift.breakEnd) - Math.max(countedInMin, shift.breakStart), 0)
+    : 0;
+  const totalMin = Math.max(countedMin - breakMin, 0);
+  const overtimeMin = outMin > shift.end ? outMin - Math.max(countedInMin, shift.end) : 0;
+
+  return {
+    grossHours: round2(grossMin / 60),
+    totalHours: round2(totalMin / 60),
+    overtimeHours: round2(Math.min(overtimeMin, totalMin) / 60),
+  };
+}
+
+/**
+ * Group a model's days that share the same times, for display.
+ * [{Mon 8-5}, {Tue 8-5}, {Sat 9-1}] → [{ dayNumbers:[1,2], ...times }, { dayNumbers:[6], ...times }]
+ * Keeps the order of the first day in each group.
+ */
+export function groupScheduleDays(days) {
+  const groups = [];
+  const byKey = new Map();
+  [...(days || [])]
+    .sort((a, b) => a.dayOfWeek - b.dayOfWeek)
+    .forEach((day) => {
+      const key = [day.startTime, day.breakStart || "", day.breakEnd || "", day.endTime].join("|");
+      if (!byKey.has(key)) {
+        const group = {
+          dayNumbers: [],
+          startTime: day.startTime,
+          breakStart: day.breakStart || "",
+          breakEnd: day.breakEnd || "",
+          endTime: day.endTime,
+        };
+        byKey.set(key, group);
+        groups.push(group);
+      }
+      byKey.get(key).dayNumbers.push(day.dayOfWeek);
+    });
+  return groups;
+}
+
+/**
+ * For display: the scheduled clock-in ("HH:MM") when the actual clock-in was
+ * earlier than scheduled on a working day, otherwise null.
+ * @param {string} clockInDate "YYYY-MM-DD"
+ * @param {string} clockInTime "HH:MM" or "HH:MM:SS"
+ * @param {Array<{dayOfWeek:number, startTime:string, breakStart:string, breakEnd:string, endTime:string}>} days
+ */
+export function getCountedFromTime(clockInDate, clockInTime, days) {
+  if (!clockInDate || !clockInTime || !days?.length) return null;
+  const [y, m, d] = clockInDate.split("-").map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay() || 7;
+  const rule = days.find((day) => day.dayOfWeek === weekday);
+  if (!rule || validateScheduleDay(rule)) return null;
+
+  const actual = toHHMM(clockInTime);
+  const scheduled = toHHMM(rule.startTime);
+  if (!actual || !scheduled) return null;
+  return toMinutes(actual) < toMinutes(scheduled) ? scheduled : null;
+}
