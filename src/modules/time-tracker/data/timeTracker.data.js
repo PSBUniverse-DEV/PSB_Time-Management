@@ -78,6 +78,9 @@ export function createAttendanceFormFromRow(row) {
 
 const MINUTES_PER_DAY = 24 * 60;
 
+/** Minimum time past the scheduled clock-out before it counts as overtime. */
+export const OVERTIME_MIN_MINUTES = 60;
+
 /** ISO weekdays, matching time_s_schedulemodelday.day_of_week (1 = Monday). */
 export const SCHEDULE_DAYS = [
   { dayOfWeek: 1, label: "Monday", short: "Mon" },
@@ -202,7 +205,8 @@ export function summarizeScheduleDays(dayNumbers) {
  * Business Rule:
  * - The schedule row used is the one for the clock-in date's weekday.
  * - Only the part of the break the person was clocked in for is removed.
- * - Overtime = time worked after the scheduled clock-out (daily only).
+ * - Overtime = full hours after the scheduled clock-out, rounded down
+ *   (e.g. 1h46m → 1). Leftover minutes aren't counted.
  * - Time before the scheduled clock-in is not counted; hours start at the
  *   scheduled clock-in.
  * - Rest day or unusable schedule row: everything is regular, no break.
@@ -214,8 +218,10 @@ export function summarizeScheduleDays(dayNumbers) {
  *   dates "YYYY-MM-DD", times "HH:MM" or "HH:MM:SS"
  * @param {Record<number, {startTime:string, breakStart:string, breakEnd:string, endTime:string}>} rulesByDay
  *   keyed by ISO weekday (1 = Monday)
- * @returns {{grossHours:number, totalHours:number, overtimeHours:number}}
+ * @returns {{grossHours:number, totalHours:number, overtimeHours:number, countedUntilTime:?string}}
  *   grossHours can be negative (clock-out before clock-in) so callers can reject it.
+ *   countedUntilTime is the time counting stopped ("HH:MM") when minutes
+ *   after it were dropped, otherwise null.
  */
 export function computeLogHours({ clockInDate, clockInTime, clockOutDate, clockOutTime }, rulesByDay) {
   const toMin = (value) => {
@@ -238,29 +244,53 @@ export function computeLogHours({ clockInDate, clockInTime, clockOutDate, clockO
   const outMin = daysBetween(clockInDate, clockOutDate) * MINUTES_PER_DAY + toMin(clockOutTime);
   const grossMin = outMin - inMin;
 
-  if (grossMin < 0) return { grossHours: round2(grossMin / 60), totalHours: 0, overtimeHours: 0 };
+  if (grossMin < 0) {
+    return { grossHours: round2(grossMin / 60), totalHours: 0, overtimeHours: 0, countedUntilTime: null };
+  }
 
   const rule = rulesByDay?.[isoWeekday(clockInDate)];
   if (!rule || validateScheduleDay(rule)) {
-    return { grossHours: round2(grossMin / 60), totalHours: round2(grossMin / 60), overtimeHours: 0 };
+    return {
+      grossHours: round2(grossMin / 60),
+      totalHours: round2(grossMin / 60),
+      overtimeHours: 0,
+      countedUntilTime: null,
+    };
   }
 
   const shift = resolveScheduleDay(rule);
 
   // Early clock-in isn't paid: counting starts at the scheduled clock-in.
   const countedInMin = Math.max(inMin, shift.start);
-  const countedMin = Math.max(outMin - countedInMin, 0);
 
+  // Overtime is counted in whole hours after the scheduled clock-out,
+  // rounded down. Leftover minutes aren't counted at all, so counting stops
+  // at the scheduled clock-out plus the full overtime hours.
+  const overtimeStartMin = Math.max(countedInMin, shift.end);
+  const rawOvertimeMin = Math.max(outMin - overtimeStartMin, 0);
+  const overtimeWholeHours = Math.floor(rawOvertimeMin / OVERTIME_MIN_MINUTES);
+  const countedOutMin = overtimeWholeHours > 0
+    ? overtimeStartMin + overtimeWholeHours * OVERTIME_MIN_MINUTES
+    : Math.min(outMin, shift.end);
+
+  const countedMin = Math.max(countedOutMin - countedInMin, 0);
   const breakMin = shift.breakStart != null
-    ? Math.max(Math.min(outMin, shift.breakEnd) - Math.max(countedInMin, shift.breakStart), 0)
+    ? Math.max(Math.min(countedOutMin, shift.breakEnd) - Math.max(countedInMin, shift.breakStart), 0)
     : 0;
   const totalMin = Math.max(countedMin - breakMin, 0);
-  const overtimeMin = outMin > shift.end ? outMin - Math.max(countedInMin, shift.end) : 0;
+  const overtimeMin = overtimeWholeHours * OVERTIME_MIN_MINUTES;
+
+  // For display: where counting stopped, when minutes past it were dropped.
+  const minuteOfDay = ((Math.round(countedOutMin) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const countedUntilTime = outMin > countedOutMin && outMin > shift.end
+    ? `${String(Math.floor(minuteOfDay / 60)).padStart(2, "0")}:${String(minuteOfDay % 60).padStart(2, "0")}`
+    : null;
 
   return {
     grossHours: round2(grossMin / 60),
     totalHours: round2(totalMin / 60),
     overtimeHours: round2(Math.min(overtimeMin, totalMin) / 60),
+    countedUntilTime,
   };
 }
 
@@ -290,24 +320,4 @@ export function groupScheduleDays(days) {
       byKey.get(key).dayNumbers.push(day.dayOfWeek);
     });
   return groups;
-}
-
-/**
- * For display: the scheduled clock-in ("HH:MM") when the actual clock-in was
- * earlier than scheduled on a working day, otherwise null.
- * @param {string} clockInDate "YYYY-MM-DD"
- * @param {string} clockInTime "HH:MM" or "HH:MM:SS"
- * @param {Array<{dayOfWeek:number, startTime:string, breakStart:string, breakEnd:string, endTime:string}>} days
- */
-export function getCountedFromTime(clockInDate, clockInTime, days) {
-  if (!clockInDate || !clockInTime || !days?.length) return null;
-  const [y, m, d] = clockInDate.split("-").map(Number);
-  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay() || 7;
-  const rule = days.find((day) => day.dayOfWeek === weekday);
-  if (!rule || validateScheduleDay(rule)) return null;
-
-  const actual = toHHMM(clockInTime);
-  const scheduled = toHHMM(rule.startTime);
-  if (!actual || !scheduled) return null;
-  return toMinutes(actual) < toMinutes(scheduled) ? scheduled : null;
 }

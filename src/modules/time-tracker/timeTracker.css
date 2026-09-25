@@ -2580,11 +2580,3 @@
 .tt-schedule-note {
   margin: 0.75rem 0 0;
 }
-
-.tt-clock-counted-from {
-  display: block;
-  margin-top: 0.15rem;
-  font-size: 10px;
-  font-weight: 600;
-  color: #b45309;
-}

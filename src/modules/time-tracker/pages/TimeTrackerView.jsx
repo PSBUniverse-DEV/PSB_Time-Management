@@ -68,7 +68,6 @@ import {
   SCHEDULE_DAYS,
   computeScheduledDayHours,
   computeScheduledWeeklyHours,
-  getCountedFromTime,
   groupScheduleDays,
   resolveScheduleDay,
   summarizeScheduleDays,
@@ -382,14 +381,6 @@ function useLogsPage(initialData, permissions) {
         isToday: rowDate === today,
         clockedInDate: log ? formatDateDisplay(log.clock_in_date) : null,
         clockedInTime: log ? formatTimeDisplay(log.clock_in_time) : null,
-        // Shown when the employee arrived before their scheduled start, so
-        // the "Counted from" line explains why the hours look shorter.
-        countedFromTime: log
-          ? (() => {
-              const hhmm = getCountedFromTime(log.clock_in_date, log.clock_in_time, schedule?.days);
-              return hhmm ? formatTimeDisplay(hhmm) : null;
-            })()
-          : null,
         clockOutIsoDate: log?.clock_out_date ?? null,
         clockedOutDate: log?.clock_out_date
           ? formatDateDisplay(log.clock_out_date)
@@ -403,7 +394,7 @@ function useLogsPage(initialData, permissions) {
         logId: log?.log_id ?? null,
       };
     });
-  }, [weekRange, weekLogs, schedule]);
+  }, [weekRange, weekLogs]);
 
   const totalHours = useMemo(
     () => weekRows.reduce((total, row) => total + (Number(row.hours) || 0), 0),
@@ -790,9 +781,6 @@ const LOG_TABLE_COLUMNS = [
         <div className="tt-clock-cell">
           <span className="tt-clock-value">{row.clockedInDate}</span>
           <span className="tt-clock-value">{row.clockedInTime}</span>
-          {row.countedFromTime && (
-            <span className="tt-clock-counted-from">Counted from {row.countedFromTime}</span>
-          )}
         </div>
       ) : (
         <div className="tt-clock-cell">
@@ -1062,7 +1050,7 @@ function TimesheetSummary({
             icon={faBolt}
             iconClass="tt-summary-icon-overtime"
             label="Overtime"
-            sub="After scheduled clock-out"
+            sub="Full hours after scheduled clock-out"
             value={`${overtimeHours.toFixed(2)} hrs`}
             valueClass="tt-summary-value-overtime"
           />
@@ -1346,7 +1334,7 @@ function EditEntryModal({ row, onClose, onSave }) {
           </div>
 
           <label className="tt-modal-field">
-            <span className="tt-modal-label">Reason for Edit</span>
+            <span className="tt-modal-label">Reason for Edit <span className="tt-modal-required">*</span></span>
             <select
               className="tt-modal-select"
               value={reasonId}
@@ -1787,7 +1775,8 @@ function ScheduleModelModal({ model, onClose, onSave }) {
       <p className="tt-setup-hint tt-schedule-note">
         Leave both break times empty for no break. For night shifts, a time earlier than the one
         before it counts as the next day (e.g. Clock In 22:00, Clock Out 07:00).
-        Time before Clock In isn&apos;t counted. Work after Clock Out counts as overtime.
+        Time before Clock In isn&apos;t counted. Work after Clock Out counts as overtime in full
+        hours only (e.g. 1h 46m = 1 hr).
       </p>
     </Modal>
   );
