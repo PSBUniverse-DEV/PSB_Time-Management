@@ -168,6 +168,13 @@ function getMondayOfWeekStr(dateStr) {
   return `${y}-${m}-${dd}`;
 }
 
+/** "YYYY-MM-DD" + n days → "YYYY-MM-DD" (calendar math, no timezone drift). */
+function addDaysStr(dateStr, days) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d + days));
+  return date.toISOString().slice(0, 10);
+}
+
 const LOCKED_SUBMISSION_STATUSES = new Set(["pending", "approved"]);
 
 /**
@@ -1706,6 +1713,129 @@ export async function recallTimesheet({ weekStartDate }) {
   }
 
   return { success: true };
+}
+
+/**
+ * Past weeks the signed-in employee still needs to submit.
+ *
+ * Business Rule:
+ * Only weeks that actually have logs are considered, so weeks before the
+ * employee started using the app never show up. The current week is left
+ * out because it's still in progress. A week is listed when it was never
+ * submitted, or when it came back as Returned or Recalled. Weeks that are
+ * Pending or Approved with an approver are left alone.
+ *
+ * @param {Object} params
+ * @param {string} params.currentWeekStart - "YYYY-MM-DD" Monday of the user's
+ *   current week (from the browser, so it matches their local week).
+ * @returns {Promise<Array<{weekStart:string, weekEnd:string, daysLogged:number, totalHours:number, statusName:string}>>}
+ */
+export async function loadMissedSubmissions({ currentWeekStart }) {
+  const userId = await getSessionUserId();
+  if (!userId || !currentWeekStart) return [];
+
+  const supabase = getSupabaseAdmin();
+  const lookbackStart = addDaysStr(currentWeekStart, -7 * 52);
+
+  const { data: logs, error: logsError } = await supabase
+    .from("time_t_logs")
+    .select("clock_in_date, total_hours")
+    .eq("user_id", userId)
+    .gte("clock_in_date", lookbackStart)
+    .lt("clock_in_date", currentWeekStart);
+
+  if (logsError) {
+    console.error("loadMissedSubmissions logs error:", describeError(logsError));
+    throw new Error("Unable to load unsubmitted weeks.");
+  }
+  if (!logs?.length) return [];
+
+  const weeks = new Map();
+  for (const log of logs) {
+    const weekStart = getMondayOfWeekStr(log.clock_in_date);
+    if (!weeks.has(weekStart)) {
+      weeks.set(weekStart, { weekStart, weekEnd: addDaysStr(weekStart, 6), days: new Set(), totalHours: 0 });
+    }
+    const week = weeks.get(weekStart);
+    week.days.add(log.clock_in_date);
+    week.totalHours += Number(log.total_hours) || 0;
+  }
+
+  const weekStarts = [...weeks.keys()];
+  const { data: submissions, error: subError } = await supabase
+    .from("time_t_timesheetsubmissions")
+    .select("submission_id, week_start_date")
+    .eq("user_id", userId)
+    .in("week_start_date", weekStarts);
+
+  if (subError) {
+    console.error("loadMissedSubmissions submissions error:", describeError(subError));
+    throw new Error("Unable to load unsubmitted weeks.");
+  }
+
+  const submissionByWeek = new Map((submissions || []).map((s) => [s.week_start_date, s]));
+  const submissionIds = (submissions || []).map((s) => s.submission_id);
+
+  const statusBySubmission = new Map();
+  if (submissionIds.length) {
+    const { data: instances } = await supabase
+      .from("wfk_t_workflowinstance")
+      .select("document_id, status_id")
+      .eq("app_id", TIME_TRACKER_APP_ID)
+      .in("document_id", submissionIds);
+
+    const statusIds = [...new Set((instances || []).map((i) => i.status_id).filter(Boolean))];
+    const { data: statuses } = statusIds.length
+      ? await supabase.from("wfk_s_status").select("status_id, status_name").in("status_id", statusIds)
+      : { data: [] };
+    const nameById = new Map((statuses || []).map((s) => [s.status_id, s.status_name]));
+
+    for (const instance of instances || []) {
+      statusBySubmission.set(instance.document_id, nameById.get(instance.status_id) || null);
+    }
+  }
+
+  const NEEDS_SUBMIT = new Set(["returned", "recalled"]);
+
+  return [...weeks.values()]
+    .map((week) => {
+      const submission = submissionByWeek.get(week.weekStart);
+      const statusName = submission ? statusBySubmission.get(submission.submission_id) : null;
+      const needsSubmit = !submission || !statusName || NEEDS_SUBMIT.has(String(statusName).toLowerCase());
+      if (!needsSubmit) return null;
+      return {
+        weekStart: week.weekStart,
+        weekEnd: week.weekEnd,
+        daysLogged: week.days.size,
+        totalHours: Math.round(week.totalHours * 100) / 100,
+        statusName: submission && statusName ? statusName : "Not Submitted",
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
+}
+
+/**
+ * Approver's follow-ups across ALL weeks, for the Approvals KPI.
+ *
+ * Business Rule:
+ * needsAction = waiting for this approver (Pending, not yet acted on) — these
+ * are the ones the KPI counts. waitingOnEmployee = Returned or Recalled, which
+ * the employee has to fix and resubmit, so they are listed but not counted.
+ */
+export async function loadApprovalFollowUps() {
+  const rows = await loadApprovalQueue(null);
+  const needsAction = [];
+  const waitingOnEmployee = [];
+
+  for (const row of rows) {
+    const status = String(row.stage_status_name || "").toLowerCase();
+    if (row.is_actionable) needsAction.push(row);
+    else if (status === "returned" || status === "recalled") waitingOnEmployee.push(row);
+  }
+
+  const byWeekDesc = (a, b) => (a.week_start_date < b.week_start_date ? 1 : -1);
+  return { needsAction: needsAction.sort(byWeekDesc), waitingOnEmployee: waitingOnEmployee.sort(byWeekDesc) };
 }
 
 // ── Timesheets (Admin) ──────────────────────────────────────

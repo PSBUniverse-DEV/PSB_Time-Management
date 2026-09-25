@@ -22,6 +22,7 @@ import {
   toastWarning,
 } from "@/shared/components/ui";
 import {
+  faArrowsRotate,
   faBolt,
   faChevronLeft,
   faChevronRight,
@@ -32,6 +33,7 @@ import {
   faClock,
   faFileInvoiceDollar,
   faStamp,
+  faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
 
 // Module styles
@@ -43,6 +45,8 @@ import {
   clockIn as clockInAction,
   clockOut as clockOutAction,
   loadApprovalQueue,
+  loadApprovalFollowUps,
+  loadMissedSubmissions,
   loadSubmissionLogs,
   loadCurrentUserHoursTarget,
   loadCurrentUserPermissionsData,
@@ -203,6 +207,56 @@ function toTimeInputValue(timeStr) {
   return `${String(hour).padStart(2, "0")}:${match[2]}`;
 }
 
+/**
+ * Monday of the current local week as "YYYY-MM-DD".
+ *
+ * Computed in the browser on purpose: the server would use its own timezone,
+ * which can put the user on the wrong week late at night.
+ */
+function getCurrentWeekStartStr() {
+  const now = new Date();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  return toDateStr(monday);
+}
+
+/** "2026-09-28", "2026-10-04" → "Sep 28 – Oct 4, 2026" */
+function formatWeekLabel(weekStart, weekEnd) {
+  const s = new Date(`${weekStart}T00:00:00`);
+  const e = new Date(`${weekEnd}T00:00:00`);
+  return `${s.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${e.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
+/**
+ * The amber pill that shows how many things need attention, and opens the
+ * list of them. Hidden by the caller when the count is zero.
+ */
+function KpiButton({ count, label, subLabel, onClick }) {
+  return (
+    <button type="button" className="tt-kpi-btn" onClick={onClick}>
+      <FontAwesomeIcon icon={faTriangleExclamation} />
+      <span className="tt-kpi-count">{count}</span>
+      <span className="tt-kpi-label">{label}</span>
+      {subLabel && <span className="tt-kpi-sub">{subLabel}</span>}
+    </button>
+  );
+}
+
+/** A clickable row inside a KPI modal — clicking jumps the table to that week. */
+function KpiListItem({ title, meta, status, onClick }) {
+  return (
+    <li>
+      <button type="button" className="tt-kpi-item" onClick={onClick}>
+        <span className="tt-kpi-item-text">
+          <span className="tt-kpi-item-title">{title}</span>
+          <span className="tt-kpi-item-meta">{meta}</span>
+        </span>
+        <StatusBadge status={String(status || "").toLowerCase().replace(/\s+/g, "-")} label={status} />
+      </button>
+    </li>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // HOOK: useLogsPage
 // ═══════════════════════════════════════════════════════════════
@@ -301,6 +355,11 @@ function useLogsPage(initialData, permissions) {
     };
   }, [weekOffset]);
 
+  // The week the user is looking at right now. A refresh that lands after they
+  // have moved on compares against this and throws its result away.
+  const weekRangeRef = useRef(weekRange);
+  weekRangeRef.current = weekRange;
+
   // Refetch logs whenever the visible week changes. The first render is
   // skipped because that data already arrived from the server via initialData.
   const isFirstRender = useRef(true);
@@ -349,6 +408,80 @@ function useLogsPage(initialData, permissions) {
       cancelled = true;
     };
   }, [weekRange]);
+
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Past weeks that still need submitting — drives the "Unsubmitted Weeks" KPI.
+  const [missedWeeks, setMissedWeeks] = useState([]);
+
+  /**
+   * Re-count the weeks the employee still owes a submission for.
+   * Informational only, so on failure we keep the last known list rather
+   * than making the KPI disappear.
+   */
+  const refreshMissedWeeks = useCallback(async () => {
+    try {
+      setMissedWeeks(await loadMissedSubmissions({ currentWeekStart: getCurrentWeekStartStr() }));
+    } catch {
+      // KPI is informational — keep the last known list on failure.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeNav === "logs") refreshMissedWeeks();
+  }, [activeNav, refreshMissedWeeks]);
+
+  /**
+   * Re-read everything the Logs tab shows for the visible week: the logs,
+   * clock-in status, hours target + work schedule (Summary), and the
+   * submission status. Runs in parallel and applies the results together so
+   * the table and the Summary panel always match.
+   */
+  const refreshLogsPage = useCallback(async () => {
+    if (refreshing) return;
+    const weekStart = toDateStr(weekRange.start);
+    const weekEnd = toDateStr(weekRange.end);
+
+    setRefreshing(true);
+    setWeekLoading(true);
+    try {
+      const [data, status] = await Promise.all([
+        loadTimeTrackerData(weekStart, weekEnd),
+        loadWeekSubmissionStatus(weekStart),
+      ]);
+
+      // The user moved to another week while this was loading — drop it.
+      if (toDateStr(weekRangeRef.current.start) !== weekStart) return;
+
+      if (data.status === "no-session") {
+        window.location.reload();
+        return;
+      }
+      if (data.status === "load-error") {
+        toastError("Unable to refresh your time logs.", "Time Logs");
+        return;
+      }
+
+      setWeekLogs(data.logs || []);
+      setClockedIn(Boolean(data.clockedIn));
+      setOpenLogId(data.openLogId ?? null);
+      setLastClockIn(data.lastClockIn ? new Date(data.lastClockIn) : null);
+      setWeeklyHoursTarget(Number(data.weeklyHoursTarget) || 40);
+      setHasHoursTarget(Boolean(data.hasHoursTarget));
+      setSchedule(data.schedule ?? null);
+
+      setSubmissionStatus(status);
+      // Don't wipe a draft the user is typing unless the week was already submitted.
+      if (status.hasSubmission) setRemarks(status.remarks || "");
+      // The KPI spans all weeks, so it has to be re-counted alongside this week.
+      refreshMissedWeeks();
+    } catch {
+      toastError("Unable to refresh your time logs.", "Time Logs");
+    } finally {
+      setWeekLoading(false);
+      setRefreshing(false);
+    }
+  }, [refreshing, weekRange, refreshMissedWeeks]);
 
   const isSubmissionLocked = useMemo(() => {
     const name = String(submissionStatus.statusName || "").toLowerCase();
@@ -522,6 +655,8 @@ function useLogsPage(initialData, permissions) {
         toastSuccess("Timesheet submitted for approval.", "Time Tracker");
         const refreshed = await loadWeekSubmissionStatus(toDateStr(weekRange.start));
         setSubmissionStatus(refreshed);
+        // Submitting a past week takes it off the "Unsubmitted Weeks" KPI.
+        refreshMissedWeeks();
       } else {
         toastError(result.error || "Failed to submit timesheet.", "Time Tracker");
       }
@@ -531,7 +666,7 @@ function useLogsPage(initialData, permissions) {
     } finally {
       setSubmittingTimesheet(false);
     }
-  }, [submittingTimesheet, isSubmissionLocked, permissions.isRequestor, weekRange, remarks]);
+  }, [submittingTimesheet, isSubmissionLocked, permissions.isRequestor, weekRange, remarks, refreshMissedWeeks]);
 
   // Pull the submission back so the week unlocks for editing. The status is
   // refreshed on failure too, so if an approver beat us to it the panel
@@ -545,6 +680,8 @@ function useLogsPage(initialData, permissions) {
       setSubmissionStatus(refreshed);
       if (result.success) {
         toastSuccess("Timesheet recalled. You can now edit your logs and submit again.", "Time Tracker");
+        // A recalled past week goes back on the "Unsubmitted Weeks" KPI.
+        refreshMissedWeeks();
         return true;
       }
       toastError(result.error || "Failed to recall the timesheet.", "Time Tracker");
@@ -556,7 +693,7 @@ function useLogsPage(initialData, permissions) {
     } finally {
       setRecallingTimesheet(false);
     }
-  }, [recallingTimesheet, weekRange]);
+  }, [recallingTimesheet, weekRange, refreshMissedWeeks]);
 
   return {
     currentTime,
@@ -572,6 +709,9 @@ function useLogsPage(initialData, permissions) {
 
     weekOffset,
     weekLoading,
+    refreshing,
+    refreshLogsPage,
+    missedWeeks,
     totalHours,
     regularHours,
     overtimeHours,
@@ -600,6 +740,32 @@ function useLogsPage(initialData, permissions) {
  * server action is in flight. Uses `pointer-events: none` so the user can keep
  * clicking and working on the page behind the panel while it processes.
  */
+/**
+ * Reloads one table's data without reloading the page.
+ *
+ * Shared by every table in this module so they all refresh the same way: the
+ * button disables itself while the request is in flight (so a double-click
+ * can't stack up loads) and spins its icon to show that work is happening.
+ *
+ * @param {Function} onClick - the table's own reload callback
+ * @param {boolean} loading - true while that table is reloading
+ * @param {string} label - accessible name; also the tooltip
+ */
+function RefreshButton({ onClick, loading, label = "Refresh" }) {
+  return (
+    <button
+      type="button"
+      className="tt-refresh-btn"
+      onClick={onClick}
+      disabled={loading}
+      aria-label={label}
+      title={label}
+    >
+      <FontAwesomeIcon icon={faArrowsRotate} className={loading ? "tt-spin" : undefined} />
+    </button>
+  );
+}
+
 function LoadingPanel({ message }) {
   return (
     <div className="tt-loading-panel" role="status" aria-live="polite">
@@ -830,6 +996,9 @@ function TimeLogTable({
   weekOffset,
   loading,
   onEdit,
+  onRefresh,
+  refreshing,
+  headerExtra,
 }) {
   const weekDateInputRef = useRef(null);
 
@@ -878,15 +1047,19 @@ function TimeLogTable({
             />
           </div>
         </div>
-        <button
-          type="button"
-          className="tt-pill-week"
-          onClick={onThisWeek}
-          disabled={weekOffset === 0}
-        >
-          This Week
-        </button>
-        <LogsToolbar onExport={handleExportCsv} />
+        <div className="tt-table-header-actions">
+          {headerExtra}
+          <RefreshButton onClick={onRefresh} loading={refreshing} label="Refresh logs and summary" />
+          <button
+            type="button"
+            className="tt-pill-week"
+            onClick={onThisWeek}
+            disabled={weekOffset === 0}
+          >
+            This Week
+          </button>
+          <LogsToolbar onExport={handleExportCsv} />
+        </div>
       </div>
 
       <TableZ
@@ -1507,9 +1680,13 @@ function EmployeeHoursSection() {
 
   return (
     <>
+      <div className="tt-setup-toolbar">
+        <RefreshButton onClick={reload} loading={loading} label="Refresh employees" />
+      </div>
+
       <p className="tt-setup-hint">
         Pick a schedule model for each employee. Their weekly hours come from the model.
-        Employees can't clock in until they have a model.
+        Employees can&apos;t clock in until they have a model.
       </p>
       <TableZ
         data={rows}
@@ -1885,6 +2062,7 @@ function ScheduleModelsSection() {
   return (
     <>
       <div className="tt-setup-toolbar">
+        <RefreshButton onClick={reload} loading={loading} label="Refresh schedule models" />
         <Button type="button" variant="primary" onClick={() => setModalModel({})}>
           <FontAwesomeIcon icon={faPlus} /> Add Model
         </Button>
@@ -2075,6 +2253,7 @@ function EditReasonsSection() {
   return (
     <>
       <div className="tt-setup-toolbar">
+        <RefreshButton onClick={reload} loading={loading} label="Refresh edit reasons" />
         <Button type="button" variant="primary" onClick={() => setModalReason({})}>
           <FontAwesomeIcon icon={faPlus} /> Add Reason
         </Button>
@@ -2283,6 +2462,11 @@ function ApprovalsPage() {
   const [loading, setLoading] = useState(true);
   const [actionModal, setActionModal] = useState(null); // null | { mode, row }
   const [expandedRowId, setExpandedRowId] = useState(null);
+  // Bumped on refresh so an open detail panel reloads.
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  // Follow-ups across ALL weeks, for the "Awaiting Your Approval" KPI.
+  const [followUps, setFollowUps] = useState({ needsAction: [], waitingOnEmployee: [] });
+  const [followUpsOpen, setFollowUpsOpen] = useState(false);
 
   const weekRange = useMemo(() => {
     const now = new Date();
@@ -2323,6 +2507,35 @@ function ApprovalsPage() {
       cancelled = true;
     };
   }, [weekRange]);
+
+  /**
+   * Re-count the approver's follow-ups. Informational only, so on failure we
+   * keep the last known counts rather than making the KPI disappear.
+   */
+  const refreshFollowUps = useCallback(async () => {
+    try {
+      setFollowUps(await loadApprovalFollowUps());
+    } catch {
+      // informational only
+    }
+  }, []);
+
+  // Initial load for the KPI. Uses the same promise-callback shape as the
+  // approvals table load below, so a slow response can't setState on a
+  // component that has already unmounted.
+  useEffect(() => {
+    let cancelled = false;
+    loadApprovalFollowUps()
+      .then((data) => {
+        if (!cancelled) setFollowUps(data);
+      })
+      .catch(() => {
+        // informational only — keep the last known counts
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filteredRows = useMemo(() => {
     if (statusTab === "all") return rows;
@@ -2369,11 +2582,13 @@ function ApprovalsPage() {
         toastSuccess(mode === "approve" ? "Timesheet approved." : "Timesheet returned.", "Approvals");
         setActionModal(null);
         reload();
+        // The acted-on row leaves the KPI, so re-count it.
+        refreshFollowUps();
       } else {
         toastError(result.error || "Failed to process action.", "Approvals");
       }
     },
-    [actionModal, reload],
+    [actionModal, reload, refreshFollowUps],
   );
 
   const actions = useMemo(
@@ -2413,6 +2628,13 @@ function ApprovalsPage() {
     setWeekOffset(computeWeekOffsetFromToday(dateStr));
   }, []);
 
+  const refreshApprovals = useCallback(() => {
+    reload();
+    setRefreshNonce((n) => n + 1);
+    // The KPI spans all weeks, so it has to be re-counted alongside this week.
+    refreshFollowUps();
+  }, [reload, refreshFollowUps]);
+
   return (
     <div className="tt-setup-page-body">
       <div className="tt-table-header">
@@ -2439,6 +2661,19 @@ function ApprovalsPage() {
           </div>
         </div>
         <div className="tt-table-header-right">
+          {(followUps.needsAction.length > 0 || followUps.waitingOnEmployee.length > 0) && (
+            <KpiButton
+              count={followUps.needsAction.length}
+              label="awaiting your approval"
+              subLabel={
+                followUps.waitingOnEmployee.length
+                  ? `+${followUps.waitingOnEmployee.length} waiting on employee`
+                  : null
+              }
+              onClick={() => setFollowUpsOpen(true)}
+            />
+          )}
+          <RefreshButton onClick={refreshApprovals} loading={loading} label="Refresh approvals" />
           <button type="button" onClick={goThisWeek} className="tt-pill-week">
             This Week
           </button>
@@ -2473,7 +2708,9 @@ function ApprovalsPage() {
           onRowClick={(row) =>
             setExpandedRowId((prev) => (prev === row.stageinstance_id ? null : row.stageinstance_id))
           }
-          renderDetail={(row) => <ApprovalDetailPanel row={row} />}
+          renderDetail={(row) => (
+            <ApprovalDetailPanel key={`${row.stageinstance_id}-${refreshNonce}`} row={row} />
+          )}
         />
       </div>
 
@@ -2484,6 +2721,57 @@ function ApprovalsPage() {
           onClose={() => setActionModal(null)}
           onSubmit={handleAction}
         />
+      )}
+
+      {followUpsOpen && (
+        <Modal show onHide={() => setFollowUpsOpen(false)} title="Approvals Follow-up">
+          <p className="tt-kpi-modal-hint">
+            These timesheets need your attention across all weeks. Pick one to open it.
+          </p>
+          {[
+            {
+              key: "needs",
+              title: "Needs your approval",
+              rows: followUps.needsAction,
+              empty: "Nothing waiting for you.",
+            },
+            {
+              key: "waiting",
+              title: "Waiting on employee (Returned / Recalled)",
+              rows: followUps.waitingOnEmployee,
+              empty: "Nothing waiting on employees.",
+            },
+          ].map((group) => (
+            <section key={group.key} className="tt-kpi-group">
+              <h4 className="tt-kpi-group-title">
+                {group.title} ({group.rows.length})
+              </h4>
+              {group.rows.length ? (
+                <ul className="tt-kpi-list">
+                  {group.rows.map((row) => (
+                    <KpiListItem
+                      key={row.stageinstance_id}
+                      title={row.requestor_name}
+                      meta={`${formatWeekLabel(row.week_start_date, row.week_end_date)} · ${Number(row.total_hours || 0).toFixed(2)} hrs`}
+                      status={row.is_actionable ? "Pending" : row.stage_status_name}
+                      onClick={() => {
+                        const status = String(row.stage_status_name || "").toLowerCase();
+                        setFollowUpsOpen(false);
+                        setStatusTab(
+                          row.is_actionable ? "pending" : status === "returned" ? "returned" : "all",
+                        );
+                        goToWeekOfDate(row.week_start_date);
+                        setExpandedRowId(row.stageinstance_id);
+                      }}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <p className="tt-kpi-modal-hint">{group.empty}</p>
+              )}
+            </section>
+          ))}
+        </Modal>
       )}
     </div>
   );
@@ -2498,6 +2786,8 @@ function TimesheetsPage() {
   const [employeeDetails, setEmployeeDetails] = useState({});
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState("");
+  // Bumped on refresh so the detail-fetching effect re-runs.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const filteredEmployees = useMemo(
     () => employees.filter((e) => e.name.toLowerCase().includes(employeeSearch.trim().toLowerCase())),
@@ -2551,7 +2841,27 @@ function TimesheetsPage() {
         }));
       });
     });
-  }, [selectedUserIds, employees, employeeDetails]);
+  }, [weekRange, employees, selectedUserIds, employeeDetails, refreshNonce]);
+
+  /**
+   * Reload the employee list for the visible week. Keeps selections for
+   * employees still in the list, and clears cached details so the selected
+   * employees' logs are fetched fresh (the details effect refetches anything
+   * missing).
+   */
+  const refreshTimesheets = useCallback(() => {
+    setLoadingEmployees(true);
+    loadTimesheetsForWeek(toDateStr(weekRange.start))
+      .then((data) => {
+        setEmployees(data);
+        const stillListed = new Set(data.map((e) => e.user_id));
+        setSelectedUserIds((prev) => new Set([...prev].filter((id) => stillListed.has(id))));
+        setEmployeeDetails({});
+        setRefreshNonce((n) => n + 1);
+      })
+      .catch(() => toastError("Unable to load timesheets.", "Timesheets"))
+      .finally(() => setLoadingEmployees(false));
+  }, [weekRange]);
 
   const toggleEmployee = useCallback((userId) => {
     setSelectedUserIds((prev) => {
@@ -2691,6 +3001,11 @@ function TimesheetsPage() {
           </div>
         </div>
         <div className="tt-table-header-right">
+          <RefreshButton
+            onClick={refreshTimesheets}
+            loading={loadingEmployees}
+            label="Refresh timesheets"
+          />
           <button
             type="button"
             className="tt-pill-week"
@@ -2919,6 +3234,9 @@ export default function TimeTrackerView({ initialData }) {
     initialData?.status === "load-error" ? "load-error" : "ok",
   );
 
+  // The "Unsubmitted Weeks" KPI list modal.
+  const [missedModalOpen, setMissedModalOpen] = useState(false);
+
   const permissions = useMemo(
     () => getTimeTrackerPermissions(roles, orgRoles),
     [roles, orgRoles],
@@ -2937,6 +3255,9 @@ export default function TimeTrackerView({ initialData }) {
     goThisWeek,
     weekOffset,
     weekLoading,
+    refreshing,
+    refreshLogsPage,
+    missedWeeks,
     totalHours,
     regularHours,
     overtimeHours,
@@ -3054,6 +3375,17 @@ export default function TimeTrackerView({ initialData }) {
               weekOffset={weekOffset}
               loading={weekLoading}
               onEdit={setEditingRow}
+              onRefresh={refreshLogsPage}
+              refreshing={refreshing}
+              headerExtra={
+                missedWeeks.length > 0 ? (
+                  <KpiButton
+                    count={missedWeeks.length}
+                    label={missedWeeks.length === 1 ? "unsubmitted week" : "unsubmitted weeks"}
+                    onClick={() => setMissedModalOpen(true)}
+                  />
+                ) : null
+              }
             />
           </>
         )}
@@ -3096,6 +3428,31 @@ export default function TimeTrackerView({ initialData }) {
           return result;
         }}
       />
+
+      {/* "Unsubmitted Weeks" KPI list. Clicking a week jumps the table to it
+          so the employee can review the logs and submit right away. */}
+      {missedModalOpen && (
+        <Modal show onHide={() => setMissedModalOpen(false)} title="Unsubmitted Weeks">
+          <p className="tt-kpi-modal-hint">
+            These past weeks have logs but haven&apos;t been submitted for approval. Pick one to
+            open it.
+          </p>
+          <ul className="tt-kpi-list">
+            {missedWeeks.map((week) => (
+              <KpiListItem
+                key={week.weekStart}
+                title={formatWeekLabel(week.weekStart, week.weekEnd)}
+                meta={`${week.daysLogged} day${week.daysLogged === 1 ? "" : "s"} logged · ${week.totalHours.toFixed(2)} hrs`}
+                status={week.statusName}
+                onClick={() => {
+                  setMissedModalOpen(false);
+                  goToWeekOfDate(week.weekStart);
+                }}
+              />
+            ))}
+          </ul>
+        </Modal>
+      )}
 
       {/* Modal-style loading overlay for clock in / clock out. Non-blocking —
           users can keep clicking / working behind it while processing. */}
