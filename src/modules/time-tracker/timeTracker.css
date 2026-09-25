@@ -2225,3 +2225,65 @@
   color: #94a3b8;
   font-size: 13px;
 }
+
+/* ─── Load error / retry screen ─────────────────────────────────
+   Shown when the signed-in user's roles or hours target could not be
+   read. Gives a clear message and a working retry button instead of a
+   blank page with a Clock In button that does nothing. */
+.tt-load-error {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  background: #f4f8f9;
+  font-family: 'Inter', sans-serif;
+}
+
+.tt-load-error-card {
+  max-width: 26rem;
+  text-align: center;
+  padding: 2.25rem 1.75rem;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  box-shadow: 0 20px 25px -5px rgba(22, 56, 62, 0.18),
+    0 10px 10px -5px rgba(22, 56, 62, 0.08);
+}
+
+.tt-load-error-icon {
+  font-size: 28px;
+  color: #1e4c5c;
+  margin-bottom: 0.75rem;
+}
+
+.tt-load-error-title {
+  margin: 0 0 0.5rem;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1e4c5c;
+}
+
+.tt-load-error-text {
+  margin: 0 0 1.25rem;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #64748b;
+}
+
+.tt-load-error-btn {
+  padding: 0.55rem 1.4rem;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+  color: #ffffff;
+  background: #1e4c5c;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.tt-load-error-btn:hover {
+  background: #163b48;
+}

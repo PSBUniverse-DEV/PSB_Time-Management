@@ -40,6 +40,13 @@ async function getSessionUserId() {
 
 const TIME_TRACKER_APP_ID = 10;
 
+/**
+ * Load the Time Tracker app roles and organization roles for a user.
+ *
+ * Errors are thrown instead of being swallowed. An earlier version returned an
+ * empty list on failure, which was indistinguishable from "this user has no
+ * roles" and left the page blank with no menu items and no log entry.
+ */
 async function loadTimeTrackerRoles(supabase, userId) {
   const { data: accessRows, error: accessError } = await supabase
     .from("psb_m_userapproleaccess")
@@ -47,11 +54,11 @@ async function loadTimeTrackerRoles(supabase, userId) {
     .eq("user_id", userId)
     .eq("app_id", TIME_TRACKER_APP_ID)
     .eq("is_active", true);
+  if (accessError) throw new Error(`role access: ${describeError(accessError)}`);
 
-  const roleIds = accessError || !Array.isArray(accessRows)
-    ? []
-    : [...new Set(accessRows.map((row) => row.role_id).filter(Boolean))];
-  const [{ data: roles }, { data: orgAccessRows }] = await Promise.all([
+  const roleIds = [...new Set((accessRows || []).map((row) => row.role_id).filter(Boolean))];
+
+  const [rolesRes, orgAccessRes] = await Promise.all([
     roleIds.length
       ? supabase
         .from("psb_s_role")
@@ -66,19 +73,22 @@ async function loadTimeTrackerRoles(supabase, userId) {
       .eq("user_id", userId)
       .eq("is_active", true),
   ]);
+  if (rolesRes.error) throw new Error(`roles: ${describeError(rolesRes.error)}`);
+  if (orgAccessRes.error) throw new Error(`org access: ${describeError(orgAccessRes.error)}`);
 
-  const orgRoleIds = [...new Set((orgAccessRows || []).map((row) => row.role_id).filter(Boolean))];
-  const { data: orgRoles } = orgRoleIds.length
+  const orgRoleIds = [...new Set((orgAccessRes.data || []).map((row) => row.role_id).filter(Boolean))];
+  const orgRes = orgRoleIds.length
     ? await supabase
       .from("wfk_s_orgrole")
       .select("orgrole_id, name, description")
       .in("orgrole_id", orgRoleIds)
       .eq("is_active", true)
     : { data: [] };
+  if (orgRes.error) throw new Error(`org roles: ${describeError(orgRes.error)}`);
 
   return {
-    roles: Array.isArray(roles) ? roles : [],
-    orgRoles: Array.isArray(orgRoles) ? orgRoles : [],
+    roles: Array.isArray(rolesRes.data) ? rolesRes.data : [],
+    orgRoles: Array.isArray(orgRes.data) ? orgRes.data : [],
   };
 }
 
@@ -87,6 +97,16 @@ const DEFAULT_WEEKLY_HOURS_TARGET = 40;
 /**
  * Look up a user's weekly hours target. `hasHoursTarget` is false when no
  * active row exists — used to gate Clock In until an admin sets one up.
+ *
+ * Business Rule:
+ * This used `.maybeSingle()`, which returns an error whenever a user has more
+ * than one active row. That made a correctly configured user look like they
+ * had no target, so Clock In stayed disabled. Reading the most recently
+ * updated row is more forgiving and reads correctly even if duplicate rows
+ * already exist from earlier data problems.
+ *
+ * Throws on a real database error so the caller can tell the user their access
+ * could not be loaded, rather than silently showing "target not set".
  */
 async function loadHoursTargetInfo(supabase, userId) {
   const { data, error } = await supabase
@@ -94,13 +114,17 @@ async function loadHoursTargetInfo(supabase, userId) {
     .select("weekly_hours_target")
     .eq("user_id", userId)
     .eq("is_active", true)
-    .maybeSingle();
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .limit(1);
 
-  if (error || !data) {
+  if (error) throw new Error(`hours target: ${describeError(error)}`);
+
+  const row = data?.[0];
+  if (!row) {
     return { weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET, hasHoursTarget: false };
   }
   return {
-    weeklyHoursTarget: Number(data.weekly_hours_target) || DEFAULT_WEEKLY_HOURS_TARGET,
+    weeklyHoursTarget: Number(row.weekly_hours_target) || DEFAULT_WEEKLY_HOURS_TARGET,
     hasHoursTarget: true,
   };
 }
@@ -109,13 +133,22 @@ async function loadHoursTargetInfo(supabase, userId) {
  * Refetch just the current user's Time Tracker roles/org-roles — used to
  * keep sidebar tab visibility in sync after an Admin changes role access
  * elsewhere, without re-fetching the whole week's logs.
+ *
+ * Returns `status: "no-session"` when the sign-in has expired, and
+ * `status: "load-error"` when the database could not be read, so the page can
+ * show a retry message instead of an empty screen.
  */
 export async function loadCurrentUserPermissionsData() {
   const userId = await getSessionUserId();
-  if (!userId) return { roles: [], orgRoles: [] };
+  if (!userId) return { roles: [], orgRoles: [], status: "no-session" };
 
-  const supabase = getSupabaseAdmin();
-  return loadTimeTrackerRoles(supabase, userId);
+  try {
+    const result = await loadTimeTrackerRoles(getSupabaseAdmin(), userId);
+    return { ...result, status: "ok" };
+  } catch (err) {
+    console.error("loadCurrentUserPermissionsData:", userId, err.message);
+    return { roles: [], orgRoles: [], status: "load-error" };
+  }
 }
 
 /** Monday of the week containing a "YYYY-MM-DD" date string. */
@@ -234,30 +267,55 @@ function diffHours(inDateStr, inTimeStr, outDateStr, outTimeStr) {
 // ── Reads ────────────────────────────────────────────────────
 
 /**
+ * The safe, empty shape the page starts from whenever data can't be loaded.
+ *
+ * Business Rule:
+ * A user with no Time Tracker roles should see a page with no tabs, not a
+ * broken one. Spreading this constant means callers only need to add `status`
+ * to describe *why* the data is empty.
+ */
+const EMPTY_DATA = {
+  logs: [],
+  roles: [],
+  orgRoles: [],
+  weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
+  hasHoursTarget: false,
+  clockedIn: false,
+  openLogId: null,
+  lastClockIn: null,
+  config: { lateDeadline: DEFAULT_LATE_DEADLINE, gracePeriod: DEFAULT_GRACE_PERIOD },
+};
+
+/**
  * Load this week's logs + current clock status for the logged-in user.
  * @param {string} weekStartDate - "YYYY-MM-DD"
  * @param {string} weekEndDate - "YYYY-MM-DD"
+ *
+ * `status` tells the page what happened, so it can react instead of silently
+ * rendering an empty screen:
+ *   "no-session" - nobody is signed in (or the session expired). The page
+ *                 sends the user to the login screen.
+ *   "load-error" - signed in, but the database read failed. The page shows a
+ *                 retry message.
+ *   "ok"         - data loaded normally, even if the user simply has no roles.
  */
 export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
   const userId = await getSessionUserId();
 
   if (!userId) {
-    return {
-      logs: [],
-      roles: [],
-      orgRoles: [],
-      weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
-      hasHoursTarget: false,
-      clockedIn: false,
-      openLogId: null,
-      lastClockIn: null,
-      config: { lateDeadline: DEFAULT_LATE_DEADLINE, gracePeriod: DEFAULT_GRACE_PERIOD },
-    };
+    return { ...EMPTY_DATA, status: "no-session" };
   }
 
   const supabase = getSupabaseAdmin();
-  const { roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId);
-  const { weeklyHoursTarget, hasHoursTarget } = await loadHoursTargetInfo(supabase, userId);
+
+  let roles, orgRoles, weeklyHoursTarget, hasHoursTarget;
+  try {
+    ({ roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId));
+    ({ weeklyHoursTarget, hasHoursTarget } = await loadHoursTargetInfo(supabase, userId));
+  } catch (err) {
+    console.error("loadTimeTrackerData:", userId, err.message);
+    return { ...EMPTY_DATA, status: "load-error" };
+  }
 
   const { data: logs, error: logsError } = await supabase
     .from("time_t_logs")
@@ -291,6 +349,7 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
     openLogId: openLog?.log_id ?? null,
     lastClockIn: openLog ? `${openLog.clock_in_date}T${openLog.clock_in_time}` : null,
     config: { lateDeadline: DEFAULT_LATE_DEADLINE, gracePeriod: DEFAULT_GRACE_PERIOD },
+    status: "ok",
   };
 }
 
@@ -298,13 +357,32 @@ export async function loadTimeTrackerData(weekStartDate, weekEndDate) {
  * Refetch just the current user's hours-target info — used to keep the
  * Logs tab's Summary panel in sync after an Admin edits it in Setup,
  * without re-fetching the whole week's logs.
+ *
+ * Also part of the retry path: the page calls this alongside the roles refresh
+ * so a restored sign-in unlocks Clock In at the same moment the menu items
+ * come back. `status` follows the same rules as `loadTimeTrackerData`.
  */
 export async function loadCurrentUserHoursTarget() {
   const userId = await getSessionUserId();
-  if (!userId) return { weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET, hasHoursTarget: false };
+  if (!userId) {
+    return {
+      weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
+      hasHoursTarget: false,
+      status: "no-session",
+    };
+  }
 
-  const supabase = getSupabaseAdmin();
-  return loadHoursTargetInfo(supabase, userId);
+  try {
+    const result = await loadHoursTargetInfo(getSupabaseAdmin(), userId);
+    return { ...result, status: "ok" };
+  } catch (err) {
+    console.error("loadCurrentUserHoursTarget:", userId, err.message);
+    return {
+      weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET,
+      hasHoursTarget: false,
+      status: "load-error",
+    };
+  }
 }
 
 // ── Writes ───────────────────────────────────────────────────
@@ -316,7 +394,16 @@ export async function clockIn(timezone) {
 
   const supabase = getSupabaseAdmin();
 
-  const { hasHoursTarget } = await loadHoursTargetInfo(supabase, userId);
+  // The hours-target read now throws on a real database error rather than
+  // pretending the target is missing, so it needs its own handling here.
+  let hasHoursTarget;
+  try {
+    ({ hasHoursTarget } = await loadHoursTargetInfo(supabase, userId));
+  } catch (err) {
+    console.error("clockIn hours target error:", err.message);
+    return { success: false, error: "Unable to check your hours target. Please try again." };
+  }
+
   if (!hasHoursTarget) {
     return {
       success: false,
@@ -457,7 +544,17 @@ export async function loadEmployeeHoursTargets() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Create or update a user's weekly hours target (upsert-by-check, preserving created_by on updates). */
+/**
+ * Create or update a user's weekly hours target.
+ *
+ * Business Rule:
+ * A user should only ever have one active target row. This used `.maybeSingle()`
+ * to check for an existing row, which fails whenever duplicates already exist —
+ * `existing` became null and the code inserted *another* duplicate, making the
+ * problem worse each time an admin saved. Reading the most recently updated row
+ * (same approach as `loadHoursTargetInfo`) means an existing row is always found
+ * and updated, so saving can no longer add duplicates.
+ */
 export async function setUserWeeklyHoursTarget(targetUserId, hours) {
   const userId = await getSessionUserId();
   if (!userId) return { success: false, error: "Not authenticated." };
@@ -469,11 +566,21 @@ export async function setUserWeeklyHoursTarget(targetUserId, hours) {
 
   const supabase = getSupabaseAdmin();
 
-  const { data: existing } = await supabase
+  const { data: existingRows, error: lookupError } = await supabase
     .from("time_m_userhourstarget")
     .select("target_id")
     .eq("user_id", targetUserId)
-    .maybeSingle();
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .limit(1);
+
+  if (lookupError) {
+    console.error("setUserWeeklyHoursTarget lookup error:", describeError(lookupError));
+    return { success: false, error: "Failed to look up the current hours target." };
+  }
+
+  // The first row is the most recently updated one, so updating it keeps the
+  // newest value the admin just typed.
+  const existing = existingRows?.[0];
 
   if (existing) {
     const { error } = await supabase

@@ -230,6 +230,24 @@ function useLogsPage(initialData, permissions) {
     return () => clearInterval(interval);
   }, []);
 
+  // Pull the hours target fresh from the server into state.
+  //
+  // Two callers share this: the Logs tab refetch below (so the Summary panel
+  // follows edits made in Setup), and the page-level retry, which needs Clock
+  // In to unlock at the same moment the menu items come back. Returns false
+  // when the read failed so callers can decide what to show.
+  const refreshHoursTarget = useCallback(async () => {
+    try {
+      const data = await loadCurrentUserHoursTarget();
+      if (data.status === "load-error") return false;
+      setWeeklyHoursTarget(Number(data.weeklyHoursTarget) || 40);
+      setHasHoursTarget(Boolean(data.hasHoursTarget));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   // Keep the Summary panel's hours target in sync with Setup. Refetches
   // whenever the Logs tab becomes active (that's the only place it's
   // shown), skipping the first render since initialData is already fresh.
@@ -240,17 +258,8 @@ function useLogsPage(initialData, permissions) {
       return;
     }
     if (activeNav !== "logs") return;
-
-    let cancelled = false;
-    loadCurrentUserHoursTarget().then((data) => {
-      if (cancelled) return;
-      setWeeklyHoursTarget(Number(data.weeklyHoursTarget) || 40);
-      setHasHoursTarget(Boolean(data.hasHoursTarget));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeNav]);
+    refreshHoursTarget();
+  }, [activeNav, refreshHoursTarget]);
 
   // Compute week date range for the header
   const weekRange = useMemo(() => {
@@ -288,7 +297,14 @@ function useLogsPage(initialData, permissions) {
     setWeekLoading(true);
     loadTimeTrackerData(toDateStr(weekRange.start), toDateStr(weekRange.end))
       .then((data) => {
-        if (!cancelled) setWeekLogs(data.logs || []);
+        if (cancelled) return;
+        // An expired sign-in would otherwise blank the table with no
+        // explanation. A full reload sends the user to the login screen.
+        if (data.status === "no-session") {
+          window.location.reload();
+          return;
+        }
+        setWeekLogs(data.logs || []);
       })
       .catch(() => {
         if (!cancelled)
@@ -517,6 +533,7 @@ function useLogsPage(initialData, permissions) {
     overtimeHours,
     weeklyHoursTarget,
     hasHoursTarget,
+    refreshHoursTarget,
     clockedIn,
     lastClockIn,
     handleClockToggle,
@@ -2208,9 +2225,45 @@ function AdminSetupPage() {
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Shown when the Time Tracker can't load the signed-in user's access.
+ *
+ * Why this exists: previously a failed load left a blank page — no menu items,
+ * and a Clock In button that did nothing when clicked, with no explanation.
+ * This gives the user a plain message and a button that actually retries.
+ *
+ * `onRetry` re-reads the roles and weekly hours target. If the problem was a
+ * short network or database blip, the Time Tracker comes back on its own.
+ */
+function LoadErrorScreen({ onRetry }) {
+  return (
+    <div className="tt-load-error">
+      <div className="tt-load-error-card">
+        <FontAwesomeIcon icon={faClock} className="tt-load-error-icon" />
+        <h2 className="tt-load-error-title">We couldn&apos;t load your Time Tracker</h2>
+        <p className="tt-load-error-text">
+          Something went wrong while loading your access. Please try again — this
+          is usually temporary.
+        </p>
+        <button type="button" className="tt-load-error-btn" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function TimeTrackerView({ initialData }) {
   const [roles, setRoles] = useState(initialData?.roles || []);
   const [orgRoles, setOrgRoles] = useState(initialData?.orgRoles || []);
+
+  // "ok" shows the Time Tracker, "load-error" shows the retry screen.
+  // The server sends "load-error" when the roles/hours-target read fails, and
+  // "no-session" never reaches here because the page redirects to login.
+  const [loadStatus, setLoadStatus] = useState(
+    initialData?.status === "load-error" ? "load-error" : "ok",
+  );
+
   const permissions = useMemo(
     () => getTimeTrackerPermissions(roles, orgRoles),
     [roles, orgRoles],
@@ -2234,6 +2287,7 @@ export default function TimeTrackerView({ initialData }) {
     overtimeHours,
     weeklyHoursTarget,
     hasHoursTarget,
+    refreshHoursTarget,
     clockedIn,
     lastClockIn,
     handleClockToggle,
@@ -2246,6 +2300,38 @@ export default function TimeTrackerView({ initialData }) {
     submittingTimesheet,
     handleSubmitTimesheet,
   } = useLogsPage(initialData, permissions);
+
+  // Re-read the user's roles and weekly hours target from the server.
+  //
+  // Why this exists: a temporary database or network problem used to leave the
+  // page showing nothing at all, with a Clock In button that silently did
+  // nothing. Refreshing both together means the menu items and the Clock In
+  // button recover in the same moment, and a genuine failure shows a message
+  // the user can act on instead of a blank screen.
+  const reloadAccess = useCallback(async () => {
+    try {
+      const data = await loadCurrentUserPermissionsData();
+      if (data.status === "load-error") {
+        setLoadStatus("load-error");
+        return;
+      }
+      setRoles(data.roles || []);
+      setOrgRoles(data.orgRoles || []);
+      // Unlock Clock In at the same time as the tabs, not a moment later.
+      await refreshHoursTarget();
+      setLoadStatus("ok");
+    } catch {
+      setLoadStatus("load-error");
+    }
+  }, [refreshHoursTarget]);
+
+  // Recover when the user comes back to this tab. This covers the common case
+  // of signing in again in another tab, or a network blip clearing up.
+  useEffect(() => {
+    const onFocus = () => reloadAccess();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [reloadAccess]);
 
   // Keep sidebar tab visibility in sync with role changes made elsewhere
   // (e.g. User Master Setup). Refetches whenever the Logs tab becomes
@@ -2262,7 +2348,7 @@ export default function TimeTrackerView({ initialData }) {
     // Ignore refetch failures — keep showing the current (stale) permissions.
     loadCurrentUserPermissionsData()
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || data.status === "load-error") return;
         setRoles(data.roles || []);
         setOrgRoles(data.orgRoles || []);
       })
@@ -2274,6 +2360,12 @@ export default function TimeTrackerView({ initialData }) {
 
   const [editingRow, setEditingRow] = useState(null);
   const workedDays = weekRows.filter((row) => row.hasData).length;
+
+  // All hooks above run on every render, so the retry screen can be returned
+  // here without breaking the Rules of Hooks.
+  if (loadStatus === "load-error") {
+    return <LoadErrorScreen onRetry={reloadAccess} />;
+  }
 
   return (
     <div className="tt-app-layout">
