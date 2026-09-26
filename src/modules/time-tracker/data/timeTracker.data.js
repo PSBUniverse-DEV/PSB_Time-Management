@@ -9,6 +9,53 @@
 export const DEFAULT_LATE_DEADLINE = "08:15";
 export const DEFAULT_GRACE_PERIOD = 15; // minutes
 
+// ─── App Time Zone ───────────────────────────────────────────
+//
+// Business Rule:
+// The whole Time Tracker runs on Dallas, Texas time, whatever time zone the
+// employee's device is in. Stored dates/times are Dallas wall-clock values.
+
+export const APP_TIMEZONE = "America/Chicago";
+export const APP_TIMEZONE_LABEL = "Central Time (Dallas)";
+
+/**
+ * Current (or given) moment as Dallas wall-clock parts.
+ * @returns {{dateStr: string, timeStr: string}} "YYYY-MM-DD", "HH:MM:SS"
+ */
+export function getAppDateParts(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: APP_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .map((p) => [p.type, p.value]),
+  );
+  return {
+    dateStr: `${parts.year}-${parts.month}-${parts.day}`,
+    timeStr: `${parts.hour}:${parts.minute}:${parts.second}`,
+  };
+}
+
+/** Today's date in Dallas as "YYYY-MM-DD". */
+export function getAppTodayStr() {
+  return getAppDateParts().dateStr;
+}
+
+/**
+ * Today's Dallas date as a Date at local midnight — a plain calendar carrier
+ * for week math (getDay / setDate). Never use it as a real moment in time.
+ */
+export function getAppTodayDate() {
+  return new Date(`${getAppTodayStr()}T00:00:00`);
+}
+
 // ─── Display Helpers ─────────────────────────────────────────
 
 /** Format minutes into "Xh Ym" or "Xh" or "Ym" */
@@ -78,8 +125,45 @@ export function createAttendanceFormFromRow(row) {
 
 const MINUTES_PER_DAY = 24 * 60;
 
-/** Minimum time past the scheduled clock-out before it counts as overtime. */
-export const OVERTIME_MIN_MINUTES = 60;
+/**
+ * Round worked minutes to the company's half-hour steps, by the minutes past
+ * the last full hour: 0–15 → down to the hour, 16–35 → the half hour,
+ * 36–59 → up to the next hour. Seconds are dropped first.
+ * e.g. 4h12m → 240, 4h16m → 270, 3h36m → 240.
+ */
+export function roundWorkMinutes(minutes) {
+  const whole = Math.floor(Math.max(minutes, 0));
+  const hours = Math.floor(whole / 60);
+  const rem = whole - hours * 60;
+  if (rem <= 15) return hours * 60;
+  if (rem <= 35) return hours * 60 + 30;
+  return (hours + 1) * 60;
+}
+
+/** Overtime is counted in blocks of this many minutes, rounded down. */
+export const OVERTIME_BLOCK_MINUTES = 30;
+
+/** Minutes after the scheduled clock-in that still count as on time. */
+export const LATE_GRACE_MINUTES = 10;
+
+/**
+ * Minutes deducted for a late clock-in. Split the lateness into full hours
+ * and the minutes past them: 0–10 → +0 (grace), 11–45 → +30, 46–59 → +60.
+ * e.g. 10 → 0, 11 → 30, 45 → 30, 46 → 60, 70 → 60, 71 → 90, 106 → 120.
+ * Early or on time → 0. Seconds are dropped first.
+ */
+export function lateDeductionMinutes(lateMinutes) {
+  const late = Math.floor(lateMinutes);
+  if (late <= 0) return 0;
+  const hours = Math.floor(late / 60);
+  const rem = late - hours * 60;
+  if (rem <= LATE_GRACE_MINUTES) return hours * 60;
+  if (rem <= LATE_HALF_HOUR_UNTIL_MINUTES) return hours * 60 + 30;
+  return (hours + 1) * 60;
+}
+
+/** Minutes past a full hour of lateness that still cost only half an hour (11–45). */
+export const LATE_HALF_HOUR_UNTIL_MINUTES = 45;
 
 /** ISO weekdays, matching time_s_schedulemodelday.day_of_week (1 = Monday). */
 export const SCHEDULE_DAYS = [
@@ -204,11 +288,19 @@ export function summarizeScheduleDays(dayNumbers) {
  *
  * Business Rule:
  * - The schedule row used is the one for the clock-in date's weekday.
- * - Only the part of the break the person was clocked in for is removed.
- * - Overtime = full hours after the scheduled clock-out, rounded down
- *   (e.g. 1h46m → 1). Leftover minutes aren't counted.
- * - Time before the scheduled clock-in is not counted; hours start at the
- *   scheduled clock-in.
+ * - Early clock-in isn't counted; hours start at the scheduled clock-in.
+ * - Lateness is deducted by the minutes past each full hour late: 0–10 min
+ *   grace, 11–45 min → 0.5 hr, 46–59 min → 1 hr (e.g. 8:40 → counts from
+ *   8:30, 9:05 → from 9:00).
+ * - The break only reduces counted time past the first half of the day's
+ *   scheduled work hours, up to the full break length, so half days keep
+ *   their full hours.
+ * - Overtime = time after the scheduled clock-out in 30-minute blocks
+ *   (OVERTIME_BLOCK_MINUTES), rounded down (e.g. 1h46m → 1.5). Leftover
+ *   minutes aren't counted.
+ * - Regular time is rounded to half-hour steps by the minutes past the last
+ *   full hour (0–15 down, 16–35 → .5, 36–59 up), so every day's total is a
+ *   multiple of 0.5. Rest days are rounded the same way.
  * - Rest day or unusable schedule row: everything is regular, no break.
  *
  * All math is in minutes from midnight of the clock-in date, so night
@@ -252,7 +344,7 @@ export function computeLogHours({ clockInDate, clockInTime, clockOutDate, clockO
   if (!rule || validateScheduleDay(rule)) {
     return {
       grossHours: round2(grossMin / 60),
-      totalHours: round2(grossMin / 60),
+      totalHours: round2(roundWorkMinutes(grossMin) / 60),
       overtimeHours: 0,
       countedUntilTime: null,
     };
@@ -260,25 +352,40 @@ export function computeLogHours({ clockInDate, clockInTime, clockOutDate, clockO
 
   const shift = resolveScheduleDay(rule);
 
-  // Early clock-in isn't paid: counting starts at the scheduled clock-in.
-  const countedInMin = Math.max(inMin, shift.start);
+  // Clock-in: early time isn't counted. Lateness is deducted by the minutes
+  // past each full hour late: 0–10 grace, 11–45 → 0.5 hr, 46–59 → 1 hr
+  // (e.g. 8:10 → from 8:00, 8:40 → from 8:30, 8:50 → from 9:00, 9:05 → from 9:00).
+  const countedInMin = shift.start + lateDeductionMinutes(inMin - shift.start);
 
-  // Overtime is counted in whole hours after the scheduled clock-out,
-  // rounded down. Leftover minutes aren't counted at all, so counting stops
-  // at the scheduled clock-out plus the full overtime hours.
+  // Overtime is counted in OVERTIME_BLOCK_MINUTES blocks after the scheduled
+  // clock-out, rounded down. Leftover minutes aren't counted at all, so
+  // counting stops at the scheduled clock-out plus the full blocks.
   const overtimeStartMin = Math.max(countedInMin, shift.end);
   const rawOvertimeMin = Math.max(outMin - overtimeStartMin, 0);
-  const overtimeWholeHours = Math.floor(rawOvertimeMin / OVERTIME_MIN_MINUTES);
-  const countedOutMin = overtimeWholeHours > 0
-    ? overtimeStartMin + overtimeWholeHours * OVERTIME_MIN_MINUTES
+  const overtimeBlocks = Math.floor(rawOvertimeMin / OVERTIME_BLOCK_MINUTES);
+  const countedOutMin = overtimeBlocks > 0
+    ? overtimeStartMin + overtimeBlocks * OVERTIME_BLOCK_MINUTES
     : Math.min(outMin, shift.end);
 
   const countedMin = Math.max(countedOutMin - countedInMin, 0);
-  const breakMin = shift.breakStart != null
-    ? Math.max(Math.min(countedOutMin, shift.breakEnd) - Math.max(countedInMin, shift.breakStart), 0)
-    : 0;
-  const totalMin = Math.max(countedMin - breakMin, 0);
-  const overtimeMin = overtimeWholeHours * OVERTIME_MIN_MINUTES;
+
+  // Break: only counted time inside the scheduled hours is reduced, so the
+  // break never eats into overtime or goes below zero.
+  const regularMin = Math.max(Math.min(countedOutMin, shift.end) - countedInMin, 0);
+
+  // Half days keep their break time: the break only reduces counted time
+  // past the first half of the day's scheduled work hours (shift − break).
+  // e.g. 8:00–5:00 with a 1-hr break = 8 work hrs, so the first 4 hrs never
+  // lose break time; a full day still loses the full hour.
+  const breakLengthMin = shift.breakStart != null ? shift.breakEnd - shift.breakStart : 0;
+  const halfDayMin = (shift.end - shift.start - breakLengthMin) / 2;
+  const breakMin = Math.min(breakLengthMin, Math.max(regularMin - halfDayMin, 0));
+
+  // Overtime is already whole 30-min blocks; round only the regular part to
+  // half-hour steps, so the day's total is always a multiple of 0.5.
+  const overtimeMin = overtimeBlocks * OVERTIME_BLOCK_MINUTES;
+  const regularNetMin = Math.max(countedMin - breakMin - overtimeMin, 0);
+  const totalMin = roundWorkMinutes(regularNetMin) + overtimeMin;
 
   // For display: where counting stopped, when minutes past it were dropped.
   const minuteOfDay = ((Math.round(countedOutMin) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;

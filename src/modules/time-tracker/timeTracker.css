@@ -227,6 +227,13 @@
   color: #4ade80;
 }
 
+.tt-timezone-note {
+  margin: 0.35rem 0 0;
+  font-size: 10px;
+  font-weight: 500;
+  color: #64748b;
+}
+
 /* ═══════════════════════════════════════════════════════════
    MAIN CONTENT
    ═══════════════════════════════════════════════════════════ */
@@ -1014,6 +1021,24 @@
   margin-top: 0.15rem;
   color: var(--tt-spruce-600);
   font-size: 11px;
+}
+
+.tt-sidebar-clock {
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+
+.tt-sidebar-clock-time {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--tt-spruce-900);
+  letter-spacing: 0.02em;
+}
+
+.tt-sidebar-clock-date {
+  font-size: 11px;
+  color: #64748b;
 }
 
 .tt-sidebar-nav {

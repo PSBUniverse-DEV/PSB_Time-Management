@@ -11,6 +11,7 @@
 import { redirect } from "next/navigation";
 import TimeTrackerView from "./TimeTrackerView";
 import { loadTimeTrackerData } from "../data/timeTracker.actions";
+import { getAppTodayDate } from "../data/timeTracker.data";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,8 @@ function toDateStr(date) {
 }
 
 export default async function TimeTrackerPage() {
-  const monday = getMondayOfWeek(new Date());
+  // The first render uses Dallas "today", not the server's clock (Vercel runs on UTC).
+  const monday = getMondayOfWeek(getAppTodayDate());
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
 

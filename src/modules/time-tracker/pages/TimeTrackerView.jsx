@@ -9,7 +9,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   Button,
@@ -69,9 +69,14 @@ import {
 } from "../data/timeTracker.actions";
 import { getTimeTrackerPermissions } from "../data/timeTracker.permissions";
 import {
+  APP_TIMEZONE,
+  APP_TIMEZONE_LABEL,
   SCHEDULE_DAYS,
   computeScheduledDayHours,
   computeScheduledWeeklyHours,
+  getAppDateParts,
+  getAppTodayDate,
+  getAppTodayStr,
   groupScheduleDays,
   resolveScheduleDay,
   summarizeScheduleDays,
@@ -112,10 +117,6 @@ const DAYS_OF_WEEK = [
   "Sunday",
 ];
 
-// Browser's IANA timezone (e.g. "America/Chicago"). Passed to clock in/clock out so
-// timestamps are written in the user's local time rather than the server's.
-const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
 /**
  * Format a Date into a human-readable clock time (e.g. "08:59 PM").
  * Used to display the most recent clock-in time on the sidebar status card.
@@ -136,27 +137,48 @@ function formatSheetDate(dateStr) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }).toUpperCase();
 }
 
-/** "SEP 21, 2026 | 09:00 PM" — Timesheets page clock-in/out cells. */
-function formatSheetDateTime(dateStr, timeStr) {
-  if (!dateStr || !timeStr) return "--";
-  const d = new Date(`${dateStr}T${timeStr}`);
-  const datePart = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }).toUpperCase();
-  const timePart = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
-  return `${datePart} | ${timePart}`;
+/** "Sat, Sep 26" — weekday + date for detail tables. */
+function formatSheetDay(dateStr) {
+  if (!dateStr) return "--";
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 
-/** Weeks between today's Monday and the Monday of the week containing `dateStr`. */
-function computeWeekOffsetFromToday(dateStr) {
-  const picked = new Date(`${dateStr}T00:00:00`);
-  const pickedMonday = new Date(picked);
-  pickedMonday.setDate(picked.getDate() - ((picked.getDay() + 6) % 7));
+/** "SEP 26, 2026 | 12:29 PM" — stored Dallas date + time, formatted without any time zone conversion. */
+function formatSheetDateTime(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return "--";
+  return `${formatSheetDate(dateStr)} | ${formatTimeDisplay(timeStr)}`;
+}
 
-  const now = new Date();
-  const thisMonday = new Date(now);
-  thisMonday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+/** Regular / overtime / total from a list of logs (overtime is stored per log). */
+function summarizeLogHours(logs) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const total = round2((logs || []).reduce((s, l) => s + (Number(l.total_hours) || 0), 0));
+  const overtime = round2((logs || []).reduce((s, l) => s + (Number(l.overtime_hours) || 0), 0));
+  return { total, overtime, regular: round2(Math.max(total - overtime, 0)) };
+}
+
+/**
+ * Whole weeks between this week's Monday and the Monday of the week
+ * containing `dateStr` ("YYYY-MM-DD"). Both Mondays are taken at local
+ * midnight so the time of day can't skew the result.
+ */
+function computeWeekOffsetFromToday(dateStr) {
+  const mondayOf = (date) => {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d;
+  };
+
+  const pickedMonday = mondayOf(new Date(`${dateStr}T00:00:00`));
+  const thisMonday = mondayOf(getAppTodayDate());
 
   const diffDays = Math.round((pickedMonday - thisMonday) / (1000 * 60 * 60 * 24));
-  return diffDays / 7;
+  return Math.round(diffDays / 7);
 }
 
 /**
@@ -208,13 +230,13 @@ function toTimeInputValue(timeStr) {
 }
 
 /**
- * Monday of the current local week as "YYYY-MM-DD".
+ * Monday of the current Dallas week as "YYYY-MM-DD".
  *
  * Computed in the browser on purpose: the server would use its own timezone,
  * which can put the user on the wrong week late at night.
  */
 function getCurrentWeekStartStr() {
-  const now = new Date();
+  const now = getAppTodayDate();
   const monday = new Date(now);
   monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
   return toDateStr(monday);
@@ -333,10 +355,11 @@ function useLogsPage(initialData, permissions) {
 
   // Compute week date range for the header
   const weekRange = useMemo(() => {
-    const now = new Date();
+    const now = getAppTodayDate();
     const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, ...
     const monday = new Date(now);
-    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + Math.round(weekOffset) * 7);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
 
@@ -492,7 +515,7 @@ function useLogsPage(initialData, permissions) {
   const weekRows = useMemo(() => {
     const monday = weekRange.start;
     const logsByDate = new Map(weekLogs.map((log) => [log.clock_in_date, log]));
-    const today = toDateStr(new Date());
+    const today = getAppTodayStr();
     return DAYS_OF_WEEK.map((dayName, index) => {
       const date = new Date(monday);
       date.setDate(monday.getDate() + index);
@@ -570,7 +593,7 @@ function useLogsPage(initialData, permissions) {
     setToggling(true);
     try {
       if (!clockedIn) {
-        const result = await clockInAction(LOCAL_TIMEZONE);
+        const result = await clockInAction();
         if (result.success) {
           setClockedIn(true);
           setOpenLogId(result.record.log_id);
@@ -592,7 +615,7 @@ function useLogsPage(initialData, permissions) {
           }
         }
       } else {
-        const result = await clockOutAction(openLogId, LOCAL_TIMEZONE);
+        const result = await clockOutAction(openLogId);
         if (result.success) {
           setClockedIn(false);
           setOpenLogId(null);
@@ -783,6 +806,13 @@ function LoadingPanel({ message }) {
 
 // ─── Sidebar ──────────────────────────────────────────────────
 
+/**
+ * No-op subscription for useSyncExternalStore. We only care that the store
+ * reports "client" on the first client render, and nothing ever changes after
+ * that, so React never needs a real unsubscribe callback.
+ */
+const subscribeToNothing = () => () => {};
+
 function Sidebar({
   currentTime,
   activeNav,
@@ -794,11 +824,18 @@ function Sidebar({
   disabled,
   hasHoursTarget,
 }) {
+  // The live clock is only rendered after mount. The server and the browser
+  // compute a different second, so rendering it during SSR would produce a
+  // hydration mismatch. useSyncExternalStore gives `false` on the server and
+  // during hydration, then `true` on the client, without a setState-in-effect.
+  const mounted = useSyncExternalStore(subscribeToNothing, () => true, () => false);
+
   const timeStr = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: true,
+    timeZone: APP_TIMEZONE,
   });
 
   const dateStr = currentTime.toLocaleDateString("en-US", {
@@ -806,6 +843,7 @@ function Sidebar({
     month: "long",
     day: "numeric",
     year: "numeric",
+    timeZone: APP_TIMEZONE,
   });
 
   return (
@@ -821,6 +859,13 @@ function Sidebar({
           <div className="tt-module-caption">Workday activity</div>
         </div>
       </div>
+
+      {mounted && (
+        <div className="tt-sidebar-clock" aria-live="off">
+          <div className="tt-sidebar-clock-time">{timeStr}</div>
+          <div className="tt-sidebar-clock-date">{dateStr}</div>
+        </div>
+      )}
 
       <TimeInOutButton
         clockedIn={clockedIn}
@@ -840,6 +885,7 @@ function Sidebar({
             Weekly hours target not set. Contact your admin to enable Clock In.
           </p>
         )}
+        <p className="tt-timezone-note">All times in {APP_TIMEZONE_LABEL}</p>
       </div>
 
       {/* Navigation */}
@@ -1223,7 +1269,7 @@ function TimesheetSummary({
             icon={faBolt}
             iconClass="tt-summary-icon-overtime"
             label="Overtime"
-            sub="Full hours after scheduled clock-out"
+            sub="30-min blocks after scheduled clock-out"
             value={`${overtimeHours.toFixed(2)} hrs`}
             valueClass="tt-summary-value-overtime"
           />
@@ -1322,7 +1368,9 @@ function TimesheetSummary({
                 {recalling ? "Recalling..." : "Recall Submission"}
               </button>
               <p className="tt-summary-recall-hint">
-                Need to fix something? Recall it before it&apos;s approved, then submit again.
+                {statusLower === "approved"
+                  ? "Need to fix an approved timesheet? Recall it to undo the approval, then submit again."
+                  : "Need to fix something? Recall it, then submit again."}
               </p>
             </>
           )}
@@ -1343,7 +1391,7 @@ function TimesheetSummary({
         <Modal
           show
           onHide={() => !recalling && setConfirmRecall(false)}
-          title="Recall this timesheet?"
+          title={statusLower === "approved" ? "Recall this approved timesheet?" : "Recall this timesheet?"}
           footer={(
             <>
               <Button type="button" variant="ghost" onClick={() => setConfirmRecall(false)} disabled={recalling}>
@@ -1364,9 +1412,10 @@ function TimesheetSummary({
           )}
         >
           <p className="tt-recall-confirm-text">
-            Your approvers won&apos;t be able to review it until you submit it again, and it
-            will start again from the first approval step. You&apos;ll be able to edit this
-            week&apos;s logs right away.
+            {statusLower === "approved"
+              ? "This timesheet is already approved. Recalling it undoes the approval — you'll need to submit it again, and it will start again from the first approval step."
+              : "Your approvers won't be able to review it until you submit it again, and it will start again from the first approval step."}
+            {" "}You&apos;ll be able to edit this week&apos;s logs right away.
           </p>
         </Modal>
       )}
@@ -1950,10 +1999,14 @@ function ScheduleModelModal({ model, onClose, onSave }) {
       </div>
 
       <p className="tt-setup-hint tt-schedule-note">
-        Leave both break times empty for no break. For night shifts, a time earlier than the one
-        before it counts as the next day (e.g. Clock In 22:00, Clock Out 07:00).
-        Time before Clock In isn&apos;t counted. Work after Clock Out counts as overtime in full
-        hours only (e.g. 1h 46m = 1 hr).
+        All times are Central Time (Dallas). Clock-in has a 10-minute grace period; after that,
+        each hour late costs 0.5 hr for 11–45 min and 1 hr for 46–59 min. The break is deducted
+        only after the first half of the day&apos;s hours, so half
+        days keep their full time (leave both break times empty for no break). Work after Clock
+        Out counts as overtime in 30-minute blocks.
+        For night shifts, a time earlier than the one before it counts as the next day (e.g. Clock
+        In 22:00, Clock Out 07:00). Daily hours are rounded to the half hour (0–15 min down,
+        16–35 min to :30, 36+ min up).
       </p>
     </Modal>
   );
@@ -2372,6 +2425,56 @@ const APPROVAL_STATUS_TABS = [
   { key: "all", label: "All" },
 ];
 
+/** A week of logs with the hours breakdown — same numbers as the Logs Summary panel. */
+function WeekLogsDetail({ logs, weeklyHoursTarget, remarks }) {
+  const { total, overtime, regular } = summarizeLogHours(logs);
+  return (
+    <>
+      <table className="tt-approval-detail-table">
+        <thead>
+          <tr>
+            <th>Day</th>
+            <th>Clocked In</th>
+            <th>Clocked Out</th>
+            <th>Hours</th>
+            <th>Overtime</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="tt-approval-detail-empty">No logs recorded for this week.</td>
+            </tr>
+          ) : (
+            logs.map((log) => (
+              <tr key={log.log_id}>
+                <td>{formatSheetDay(log.clock_in_date)}</td>
+                <td>{log.clock_in_time ? formatSheetDateTime(log.clock_in_date, log.clock_in_time) : "--"}</td>
+                <td>{log.clock_out_time ? formatSheetDateTime(log.clock_out_date, log.clock_out_time) : "--"}</td>
+                <td>{log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--"}</td>
+                <td>{Number(log.overtime_hours || 0).toFixed(2)}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+
+      <div className="tt-approval-detail-summary">
+        <span><strong>Scheduled:</strong> {Number(weeklyHoursTarget || 0).toFixed(2)} hrs</span>
+        <span><strong>Regular:</strong> {regular.toFixed(2)} hrs</span>
+        <span><strong>Overtime:</strong> {overtime.toFixed(2)} hrs</span>
+        <span><strong>Total:</strong> {total.toFixed(2)} hrs</span>
+      </div>
+      <p className="tt-timezone-note">All times in {APP_TIMEZONE_LABEL}</p>
+
+      <div className="tt-approval-detail-remarks">
+        <span className="tt-approval-detail-remarks-label">Remarks / Notes:</span>
+        <p className="tt-approval-detail-remarks-text">{remarks || "No remarks provided."}</p>
+      </div>
+    </>
+  );
+}
+
 function ApprovalDetailPanel({ row }) {
   const [logs, setLogs] = useState([]);
   const [weeklyHoursTarget, setWeeklyHoursTarget] = useState(40);
@@ -2397,59 +2500,13 @@ function ApprovalDetailPanel({ row }) {
     };
   }, [row.submission_id]);
 
-  const totalHoursRendered = useMemo(
-    () => logs.reduce((sum, log) => sum + (Number(log.total_hours) || 0), 0),
-    [logs],
-  );
-
   if (loading) {
     return <div className="tt-approval-detail-loading">Loading logs...</div>;
   }
 
   return (
     <div className="tt-approval-detail">
-      <table className="tt-approval-detail-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Clocked In</th>
-            <th>Clocked Out</th>
-            <th>Hours</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.length === 0 ? (
-            <tr>
-              <td colSpan={4} className="tt-approval-detail-empty">
-                No logs recorded for this week.
-              </td>
-            </tr>
-          ) : (
-            logs.map((log) => (
-              <tr key={log.log_id}>
-                <td>{log.clock_in_date}</td>
-                <td>{log.clock_in_time ? `${log.clock_in_date} ${log.clock_in_time}` : "--"}</td>
-                <td>{log.clock_out_time ? `${log.clock_out_date} ${log.clock_out_time}` : "--"}</td>
-                <td>{log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--"}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-
-      <div className="tt-approval-detail-summary">
-        <span>
-          <strong>Total Hours:</strong> {totalHoursRendered.toFixed(2)} hrs
-        </span>
-        <span>
-          <strong>Target Hours:</strong> {weeklyHoursTarget.toFixed(2)} hrs
-        </span>
-      </div>
-
-      <div className="tt-approval-detail-remarks">
-        <span className="tt-approval-detail-remarks-label">Remarks / Notes:</span>
-        <p className="tt-approval-detail-remarks-text">{row.remarks || "No remarks provided."}</p>
-      </div>
+      <WeekLogsDetail logs={logs} weeklyHoursTarget={weeklyHoursTarget} remarks={row.remarks} />
     </div>
   );
 }
@@ -2469,10 +2526,11 @@ function ApprovalsPage() {
   const [followUpsOpen, setFollowUpsOpen] = useState(false);
 
   const weekRange = useMemo(() => {
-    const now = new Date();
+    const now = getAppTodayDate();
     const dayOfWeek = now.getDay();
     const monday = new Date(now);
-    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + Math.round(weekOffset) * 7);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
     const formatDate = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -2795,10 +2853,11 @@ function TimesheetsPage() {
   );
 
   const weekRange = useMemo(() => {
-    const now = new Date();
+    const now = getAppTodayDate();
     const dayOfWeek = now.getDay();
     const monday = new Date(now);
-    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7) + Math.round(weekOffset) * 7);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
     const formatDate = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -2832,14 +2891,19 @@ function TimesheetsPage() {
       if (employeeDetails[userId]) return;
       const employee = employees.find((e) => e.user_id === userId);
       if (!employee) return;
-      loadSubmissionLogs(employee.submission_id).then((data) => {
-        const logs = data.logs || [];
-        const totalHoursRendered = logs.reduce((sum, log) => sum + (Number(log.total_hours) || 0), 0);
-        setEmployeeDetails((prev) => ({
-          ...prev,
-          [userId]: { logs, weeklyHoursTarget: Number(data.weeklyHoursTarget) || 40, totalHoursRendered },
-        }));
-      });
+      loadSubmissionLogs(employee.submission_id)
+        .then((data) => {
+          const logs = data.logs || [];
+          const totalHoursRendered = logs.reduce((sum, log) => sum + (Number(log.total_hours) || 0), 0);
+          setEmployeeDetails((prev) => ({
+            ...prev,
+            [userId]: { logs, weeklyHoursTarget: Number(data.weeklyHoursTarget) || 40, totalHoursRendered },
+          }));
+        })
+        .catch(() => {
+          toastError(`Unable to load ${employee.name}'s logs.`, "Timesheets");
+          setEmployeeDetails((prev) => ({ ...prev, [userId]: { logs: [], weeklyHoursTarget: 0, totalHoursRendered: 0 } }));
+        });
     });
   }, [weekRange, employees, selectedUserIds, employeeDetails, refreshNonce]);
 
@@ -2924,6 +2988,12 @@ function TimesheetsPage() {
       let cursorY = 40;
       const pageHeight = doc.internal.pageSize.getHeight();
 
+      // Document header: the week this printout covers (once, top of page 1).
+      doc.setFont(undefined, "bold");
+      doc.setFontSize(16);
+      doc.text(weekRange.fullLabel, 40, cursorY);
+      cursorY += 30;
+
       Array.from(selectedUserIds).forEach((userId) => {
         const detail = employeeDetails[userId];
         const employee = employees.find((e) => e.user_id === userId);
@@ -2934,28 +3004,28 @@ function TimesheetsPage() {
           cursorY = 40;
         }
 
-        doc.setFontSize(14);
+        // Employee name.
+        doc.setFont(undefined, "bold");
+        doc.setFontSize(12);
         doc.text(employee.name, 40, cursorY);
-        cursorY += 18;
+        cursorY += 16;
 
+        // Summary: total hours rendered, plus a blank Rate field filled in by hand.
+        doc.setFont(undefined, "normal");
         doc.setFontSize(10);
-        doc.text(weekRange.fullLabel, 40, cursorY);
-        cursorY += 14;
-        doc.text(
-          `Target Hours: ${detail.weeklyHoursTarget.toFixed(2)}   Total Hours: ${detail.totalHoursRendered.toFixed(2)}`,
-          40,
-          cursorY,
-        );
+        const { total } = summarizeLogHours(detail.logs);
+        doc.text(`Total Hours Rendered: ${total.toFixed(2)}   Rate: ____________`, 40, cursorY);
         cursorY += 10;
 
         autoTable(doc, {
           startY: cursorY,
-          head: [["Date", "Clocked In", "Clocked Out", "Hours"]],
+          head: [["Day", "Clocked In", "Clocked Out", "Hours", "Overtime"]],
           body: detail.logs.map((log) => [
-            formatSheetDate(log.clock_in_date),
+            formatSheetDay(log.clock_in_date),
             log.clock_in_time ? formatSheetDateTime(log.clock_in_date, log.clock_in_time) : "--",
             log.clock_out_time ? formatSheetDateTime(log.clock_out_date, log.clock_out_time) : "--",
             log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--",
+            Number(log.overtime_hours || 0).toFixed(2),
           ]),
           margin: { left: 40, right: 40 },
           styles: { fontSize: 9 },
@@ -2965,6 +3035,15 @@ function TimesheetsPage() {
 
         cursorY += 16;
       });
+
+      const { dateStr, timeStr } = getAppDateParts();
+      const generated = `Generated ${formatSheetDate(dateStr)} ${formatTimeDisplay(timeStr)} · All times in ${APP_TIMEZONE_LABEL}`;
+      const pageCount = doc.getNumberOfPages();
+      for (let p = 1; p <= pageCount; p += 1) {
+        doc.setPage(p);
+        doc.setFontSize(8);
+        doc.text(generated, 40, doc.internal.pageSize.getHeight() - 20);
+      }
 
       doc.save(`timesheets-${toDateStr(weekRange.start)}.pdf`);
     } catch (err) {
@@ -3090,51 +3169,11 @@ function TimesheetsPage() {
               return (
                 <div key={userId} className="tt-approval-detail">
                   <h4>{employee.name}</h4>
+                  <StatusBadge status={String(employee.status_name || "").toLowerCase()} label={employee.status_name} />
                   {!detail ? (
                     <div className="tt-approval-detail-loading">Loading...</div>
                   ) : (
-                    <>
-                      <table className="tt-approval-detail-table">
-                        <thead>
-                          <tr>
-                            <th>Date</th>
-                            <th>Clocked In</th>
-                            <th>Clocked Out</th>
-                            <th>Hours</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detail.logs.length === 0 ? (
-                            <tr>
-                              <td colSpan={4} className="tt-approval-detail-empty">
-                                No logs recorded for this week.
-                              </td>
-                            </tr>
-                          ) : (
-                            detail.logs.map((log) => (
-                              <tr key={log.log_id}>
-                                <td>{formatSheetDate(log.clock_in_date)}</td>
-                                <td>{log.clock_in_time ? formatSheetDateTime(log.clock_in_date, log.clock_in_time) : "--"}</td>
-                                <td>{log.clock_out_time ? formatSheetDateTime(log.clock_out_date, log.clock_out_time) : "--"}</td>
-                                <td>{log.total_hours != null ? Number(log.total_hours).toFixed(2) : "--"}</td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                      <div className="tt-approval-detail-summary">
-                        <span>
-                          <strong>Total Hours:</strong> {detail.totalHoursRendered.toFixed(2)} hrs
-                        </span>
-                        <span>
-                          <strong>Target Hours:</strong> {detail.weeklyHoursTarget.toFixed(2)} hrs
-                        </span>
-                      </div>
-                      <div className="tt-approval-detail-remarks">
-                        <span className="tt-approval-detail-remarks-label">Remarks / Notes:</span>
-                        <p className="tt-approval-detail-remarks-text">{employee.remarks || "No remarks provided."}</p>
-                      </div>
-                    </>
+                    <WeekLogsDetail logs={detail.logs} weeklyHoursTarget={detail.weeklyHoursTarget} remarks={employee.remarks} />
                   )}
                 </div>
               );

@@ -8,6 +8,7 @@ import { getCurrentSession } from "@/core/auth/session.service";
 import { getSupabaseAdmin } from "@/core/supabase/admin";
 import { getTimeTrackerPermissions } from "./timeTracker.permissions";
 import {
+  APP_TIMEZONE,
   DEFAULT_LATE_DEADLINE,
   DEFAULT_GRACE_PERIOD,
   SCHEDULE_DAYS,
@@ -403,8 +404,11 @@ export async function loadCurrentUserHoursTarget() {
 
 // ── Writes ───────────────────────────────────────────────────
 
-/** Clock in the current user. One session per calendar day (their local day). */
-export async function clockIn(timezone) {
+/**
+ * Clock in the current user. One session per Dallas calendar day.
+ * Times are recorded in Dallas time (APP_TIMEZONE), regardless of the user's device.
+ */
+export async function clockIn() {
   const userId = await getSessionUserId();
   if (!userId) return { success: false, error: "Not authenticated." };
 
@@ -428,7 +432,7 @@ export async function clockIn(timezone) {
   }
 
   const now = new Date();
-  const today = dateStrInTz(now, timezone);
+  const today = dateStrInTz(now, APP_TIMEZONE);
 
   const { data: existingToday } = await supabase
     .from("time_t_logs")
@@ -452,7 +456,7 @@ export async function clockIn(timezone) {
       user_id: userId,
       status_id: statusId,
       clock_in_date: today,
-      clock_in_time: timeStrInTz(now, timezone),
+      clock_in_time: timeStrInTz(now, APP_TIMEZONE),
       created_by: userId,
     })
     .select("*")
@@ -466,8 +470,11 @@ export async function clockIn(timezone) {
   return { success: true, record: data };
 }
 
-/** Clock out the current user's open session. */
-export async function clockOut(logId, timezone) {
+/**
+ * Clock out the current user's open session.
+ * Times are recorded in Dallas time (APP_TIMEZONE), regardless of the user's device.
+ */
+export async function clockOut(logId) {
   const userId = await getSessionUserId();
   if (!userId) return { success: false, error: "Not authenticated." };
 
@@ -485,8 +492,8 @@ export async function clockOut(logId, timezone) {
 
   const statusId = await getStatusId(supabase, STATUS_CLOCKED_OUT);
   const now = new Date();
-  const clockOutDate = dateStrInTz(now, timezone);
-  const clockOutTime = timeStrInTz(now, timezone);
+  const clockOutDate = dateStrInTz(now, APP_TIMEZONE);
+  const clockOutTime = timeStrInTz(now, APP_TIMEZONE);
 
   let rulesByDay;
   try {
@@ -1151,6 +1158,24 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
 
   const statusId = await getStatusId(supabase, hasClockOut ? STATUS_CLOCKED_OUT : STATUS_CLOCKED_IN);
 
+  // Business Rule: logs are Dallas wall-clock times, and nobody can log time
+  // that hasn't happened yet.
+  const nowDateStr = dateStrInTz(new Date(), APP_TIMEZONE);
+  const nowTimeStr = timeStrInTz(new Date(), APP_TIMEZONE);
+  const nowDallas = `${nowDateStr}T${nowTimeStr}`;
+  const [nh, nm] = nowTimeStr.split(":").map(Number);
+  const nowLabel = `${nh % 12 || 12}:${String(nm).padStart(2, "0")} ${nh >= 12 ? "PM" : "AM"}`;
+  const inAt = `${clockInDate}T${clockInTime.length === 5 ? `${clockInTime}:00` : clockInTime}`;
+  if (inAt > nowDallas) {
+    return { success: false, error: `Clock In can't be later than now (${nowLabel} Central Time).` };
+  }
+  if (hasClockOut) {
+    const outAt = `${clockOutDate}T${clockOutTime.length === 5 ? `${clockOutTime}:00` : clockOutTime}`;
+    if (outAt > nowDallas) {
+      return { success: false, error: `Clock Out can't be later than now (${nowLabel} Central Time).` };
+    }
+  }
+
   let totalHours = null;
   let overtimeHours = 0;
 
@@ -1295,10 +1320,10 @@ export async function loadWeekSubmissionStatus(weekStartDate) {
     statusName = status?.status_name || null;
   }
 
-  // Recall is offered until the timesheet is fully approved, at any stage.
-  // Once approved, only an approver can undo it (by returning it).
-  const canRecall =
-    String(statusName || "").toLowerCase() === WORKFLOW_STATUS_PENDING.toLowerCase();
+  // Recall is offered while Pending (at any stage) or Approved. Recalling an
+  // Approved timesheet undoes the approval so the employee can fix and resubmit.
+  const statusLowerForRecall = String(statusName || "").toLowerCase();
+  const canRecall = statusLowerForRecall === "pending" || statusLowerForRecall === "approved";
 
   let approverName = null;
   let approverRoleName = null;
@@ -1609,13 +1634,13 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
  * Recall the signed-in employee's own submitted timesheet for a week.
  *
  * Business Rule:
- * Allowed while the timesheet is Pending at ANY stage, so an employee can still
- * pull it back after an earlier approver has reviewed it but before the final
- * one. Blocked once it is Approved — only an approver can undo that, by
- * returning it. The week then unlocks so the employee can fix their logs and
- * submit again, which restarts the approval from the first stage.
+ * Allowed while Pending (any stage) or Approved. Recalling an Approved
+ * timesheet undoes the approval. Resubmitting restarts from the first
+ * approval step. The week then unlocks so the employee can fix their logs and
+ * submit again.
  *
- * The stage update is conditional on `acted_by is null`, so if an approver
+ * The stage update is conditional on the state we expect — `acted_by is null`
+ * while Pending, or the stage row still being Approved — so if an approver
  * acts at the same moment, only one of the two wins.
  *
  * @param {Object} params
@@ -1653,10 +1678,12 @@ export async function recallTimesheet({ weekStartDate }) {
   }
 
   let pendingStatusId;
+  let approvedStatusId;
   let recalledStatusId;
   try {
-    [pendingStatusId, recalledStatusId] = await Promise.all([
+    [pendingStatusId, approvedStatusId, recalledStatusId] = await Promise.all([
       getWorkflowStatusId(supabase, WORKFLOW_STATUS_PENDING),
+      getWorkflowStatusId(supabase, "Approved"),
       getWorkflowStatusId(supabase, WORKFLOW_STATUS_RECALLED),
     ]);
   } catch (err) {
@@ -1664,14 +1691,19 @@ export async function recallTimesheet({ weekStartDate }) {
     return { success: false, error: "Recall isn't available right now. Please contact your admin." };
   }
 
-  if (instance.status_id !== pendingStatusId) {
-    return { success: false, error: "Only a timesheet that hasn't been approved yet can be recalled." };
+  const isPending = instance.status_id === pendingStatusId;
+  const isApproved = instance.status_id === approvedStatusId;
+  if (!isPending && !isApproved) {
+    return { success: false, error: "This timesheet is already open for editing, so it can't be recalled." };
   }
 
   const now = new Date().toISOString();
 
-  // Conditional: only if nobody has acted on this step yet.
-  const { data: recalledRows, error: stageError } = await supabase
+  // Conditional on the state we expect, so a recall can't overwrite an
+  // approver's action made at the same moment:
+  // - Pending: the current step hasn't been acted on yet.
+  // - Approved: the (single) stage row is still Approved.
+  let stageUpdate = supabase
     .from("wfk_t_stageinstance")
     .update({
       status_id: recalledStatusId,
@@ -1680,10 +1712,13 @@ export async function recallTimesheet({ weekStartDate }) {
       comments: null,
       is_active: false,
     })
-    .eq("instance_id", instance.instance_id)
-    .eq("wfs_id", instance.current_wfs_id)
-    .is("acted_by", null)
-    .select("stageinstance_id");
+    .eq("instance_id", instance.instance_id);
+
+  stageUpdate = isPending
+    ? stageUpdate.eq("wfs_id", instance.current_wfs_id).is("acted_by", null)
+    : stageUpdate.eq("status_id", approvedStatusId);
+
+  const { data: recalledRows, error: stageError } = await stageUpdate.select("stageinstance_id");
 
   if (stageError) {
     console.error("recallTimesheet stage error:", describeError(stageError));
@@ -1696,13 +1731,13 @@ export async function recallTimesheet({ weekStartDate }) {
     };
   }
 
-  // Conditional on the status still being Pending, so a recall can't overwrite
-  // a status that changed (e.g. an approver approved it) while we were working.
+  // Conditional on the status we read (Pending or Approved), so a recall can't
+  // overwrite a status that changed while we were working.
   const { error: updateInstanceError } = await supabase
     .from("wfk_t_workflowinstance")
     .update({ status_id: recalledStatusId, completed_at: null })
     .eq("instance_id", instance.instance_id)
-    .eq("status_id", pendingStatusId);
+    .eq("status_id", instance.status_id);
 
   if (updateInstanceError) {
     console.error("recallTimesheet instance update error:", describeError(updateInstanceError));
