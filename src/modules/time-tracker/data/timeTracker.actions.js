@@ -570,124 +570,6 @@ async function requireTimeTrackerAdmin() {
   return { userId, supabase };
 }
 
-// ── Manage Time For… (admin acting for an employee) ──────────
-
-/** "First Last", falling back to the username. Null when the user isn't found. */
-async function getUserDisplayName(supabase, userId) {
-  const { data } = await supabase
-    .from("psb_s_user")
-    .select("first_name, last_name, username")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!data) return null;
-  return `${data.first_name || ""} ${data.last_name || ""}`.trim() || data.username || null;
-}
-
-/**
- * Work out whose time an employee-facing action applies to.
- *
- * Business Rule:
- * With no `targetUserId` (or the caller's own id) the action runs for the
- * signed-in user, exactly as before. Otherwise the caller must be a Time
- * Tracker Admin and the target must have a work schedule assigned — the same
- * employees the "Manage Time For…" picker lists. The id comes from the
- * browser, so this check is what stops anyone else from acting for another user.
- *
- * Returns { userId, actorId, onBehalf, supabase }: `userId` is whose logs and
- * timesheet are read or written, `actorId` is who did it (for the audit
- * columns). Returns { error } when the caller isn't allowed.
- */
-async function resolveTimeSubject(targetUserId) {
-  const sessionUserId = await getSessionUserId();
-  if (!sessionUserId) return { error: "Not authenticated." };
-
-  const supabase = getSupabaseAdmin();
-  if (!targetUserId || String(targetUserId) === String(sessionUserId)) {
-    return { userId: sessionUserId, actorId: sessionUserId, onBehalf: false, supabase };
-  }
-
-  const isAdmin = await checkIsTimeTrackerAdmin(supabase, sessionUserId);
-  if (!isAdmin) return { error: "Only Time Tracker admins can manage another employee's time." };
-
-  let schedule;
-  try {
-    schedule = await loadUserScheduleModel(supabase, targetUserId);
-  } catch (err) {
-    console.error("resolveTimeSubject schedule error:", targetUserId, err.message);
-    return { error: "Unable to load that employee's work schedule." };
-  }
-  if (!schedule) return { error: "That employee has no work schedule assigned." };
-
-  return { userId: targetUserId, actorId: sessionUserId, onBehalf: true, supabase };
-}
-
-/**
- * Remarks prefix added when an admin submits for an employee, so the approver
- * can see who actually sent it. Kept in brackets on its own line so it can be
- * stripped back out before the remarks are shown in the editable box —
- * otherwise every resubmit would stack another copy.
- */
-const ON_BEHALF_TAG_PATTERN = /^\[Submitted by .+? on behalf of .+?\]\n?/;
-
-function buildOnBehalfTag(adminName, employeeName) {
-  return `[Submitted by ${adminName || "an admin"} on behalf of ${employeeName || "this employee"}]`;
-}
-
-function stripOnBehalfTag(remarks) {
-  return String(remarks || "").replace(ON_BEHALF_TAG_PATTERN, "");
-}
-
-/**
- * Employees the admin can manage in "Manage Time For…": active users who have
- * a work schedule assigned. Admin-only.
- */
-export async function loadManageableEmployees() {
-  const auth = await requireTimeTrackerAdmin();
-  if (auth.error) throw new Error(auth.error);
-
-  const rows = await loadEmployeeHoursTargets();
-  return rows
-    .filter((row) => row.model_id)
-    .map((row) => ({ user_id: row.user_id, name: row.name }));
-}
-
-/**
- * One week of a managed employee's logs plus the details their Summary panel
- * needs (hours target, schedule, and whether they can submit). Admin-only.
- */
-export async function loadManagedEmployeeWeek(targetUserId, weekStartDate, weekEndDate) {
-  const subject = await resolveTimeSubject(targetUserId);
-  if (subject.error) return { status: "error", error: subject.error };
-  const { userId, supabase } = subject;
-
-  try {
-    const [{ roles, orgRoles }, hoursInfo, schedule, logsRes] = await Promise.all([
-      loadTimeTrackerRoles(supabase, userId),
-      loadHoursTargetInfo(supabase, userId),
-      loadUserScheduleModel(supabase, userId),
-      supabase
-        .from("time_t_logs")
-        .select("*")
-        .eq("user_id", userId)
-        .gte("clock_in_date", weekStartDate)
-        .lte("clock_in_date", weekEndDate)
-        .order("clock_in_date", { ascending: true }),
-    ]);
-    if (logsRes.error) throw new Error(`logs: ${describeError(logsRes.error)}`);
-
-    return {
-      status: "ok",
-      logs: logsRes.data || [],
-      weeklyHoursTarget: hoursInfo.weeklyHoursTarget,
-      schedule,
-      isRequestor: getTimeTrackerPermissions(roles, orgRoles).isRequestor,
-    };
-  } catch (err) {
-    console.error("loadManagedEmployeeWeek:", targetUserId, err.message);
-    return { status: "error", error: "Unable to load this employee's time logs." };
-  }
-}
-
 const MODEL_DAY_COLUMNS = "day_of_week, start_time, break_start, break_end, end_time";
 
 /** DB day row → the shape used by the UI and the shared helpers. */
@@ -1214,16 +1096,15 @@ export async function setEditReasonActive(statusId, isActive) {
  * @param {string} params.clockOutTime - "HH:MM" (24-hour) or "" if not clocked out.
  * @param {number} params.reasonId - required time_s_status.status_id tagged 'edit_reason'.
  * @param {string} [params.notes] - optional free-text note.
- * @param {string} [params.targetUserId] - admin only: the employee whose log
- *   this is ("Manage Time For…"). Omit to edit your own.
  */
-export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clockInTime, clockOutTime, reasonId, notes, targetUserId }) {
-  const subject = await resolveTimeSubject(targetUserId);
-  if (subject.error) return { success: false, error: subject.error };
-  const { userId, actorId, onBehalf, supabase } = subject;
+export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clockInTime, clockOutTime, reasonId, notes }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
   if (!reasonId) return { success: false, error: "A reason for edit is required." };
   if (!clockInDate) return { success: false, error: "Clock In date is required." };
   if (!clockInTime) return { success: false, error: "Clock In time is required." };
+
+  const supabase = getSupabaseAdmin();
 
   const { locked, statusName } = await isWeekLocked(supabase, userId, clockInDate);
   if (locked) {
@@ -1304,12 +1185,7 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
       rulesByDay = await loadScheduleRulesForUser(supabase, userId);
     } catch (err) {
       console.error("saveTimeLogEntry schedule error:", err.message);
-      return {
-        success: false,
-        error: onBehalf
-          ? "Unable to load this employee's work schedule. Please try again."
-          : "Unable to load your work schedule. Please try again.",
-      };
+      return { success: false, error: "Unable to load your work schedule. Please try again." };
     }
 
     const hours = computeLogHours(
@@ -1341,7 +1217,7 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
     edit_reason_id: reasonId,
     notes: notes || null,
     updated_at: new Date().toISOString(),
-    updated_by: actorId,
+    updated_by: userId,
   };
 
   if (logId) {
@@ -1362,7 +1238,7 @@ export async function saveTimeLogEntry({ logId, clockInDate, clockOutDate, clock
 
   const { data, error } = await supabase
     .from("time_t_logs")
-    .insert({ ...payload, user_id: userId, created_by: actorId })
+    .insert({ ...payload, user_id: userId, created_by: userId })
     .select("*")
     .single();
 
@@ -1400,16 +1276,17 @@ async function getWorkflowStatusId(supabase, statusName) {
  * Read the current submission + workflow status for a given week, for
  * display (Timesheet Summary badge) — not a gate, just a read.
  */
-export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
-  const subject = await resolveTimeSubject(targetUserId);
-  if (subject.error) {
+export async function loadWeekSubmissionStatus(weekStartDate) {
+  const userId = await getSessionUserId();
+  if (!userId) {
     return {
       hasSubmission: false, statusName: null, submittedAt: null, remarks: "",
       approverName: null, approverRoleName: null,
       lastActionComment: null, lastActionByName: null, canRecall: false,
     };
   }
-  const { userId, supabase } = subject;
+
+  const supabase = getSupabaseAdmin();
 
   const { data: submission } = await supabase
     .from("time_t_timesheetsubmissions")
@@ -1527,9 +1404,7 @@ export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
     hasSubmission: true,
     statusName,
     submittedAt: submission.submitted_at,
-    // The "on behalf of" tag is for the approver; the editable box gets the
-    // remarks without it so a resubmit doesn't add a second copy.
-    remarks: stripOnBehalfTag(submission.remarks),
+    remarks: submission.remarks || "",
     approverName,
     approverRoleName,
     lastActionComment,
@@ -1544,36 +1419,20 @@ export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
  * @param {string} params.weekStartDate - "YYYY-MM-DD", must be a Monday.
  * @param {string} params.weekEndDate - "YYYY-MM-DD".
  * @param {string} [params.remarks] - optional note for the approver.
- * @param {string} [params.targetUserId] - admin only: submit for this employee
- *   ("Manage Time For…"). It goes to the employee's normal approver, and the
- *   remarks are tagged so the approver can see an admin sent it.
  */
-export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, targetUserId }) {
-  const subject = await resolveTimeSubject(targetUserId);
-  if (subject.error) return { success: false, error: subject.error };
-  const { userId, actorId, onBehalf, supabase } = subject;
+export async function submitTimesheet({ weekStartDate, weekEndDate, remarks }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
 
-  // The org role that routes the approval belongs to the employee, so it is
-  // the employee's role that is checked, even when an admin submits.
+  const supabase = getSupabaseAdmin();
+
   const { roles, orgRoles } = await loadTimeTrackerRoles(supabase, userId);
   const { isRequestor } = getTimeTrackerPermissions(roles, orgRoles);
   if (!isRequestor) {
     return {
       success: false,
-      error: onBehalf
-        ? 'This employee doesn\'t have the "Timesheet Requestor - VA" org role required to submit a timesheet.'
-        : 'You don\'t have the "Timesheet Requestor - VA" org role required to submit a timesheet.',
+      error: 'You don\'t have the "Timesheet Requestor - VA" org role required to submit a timesheet.',
     };
-  }
-
-  let storedRemarks = stripOnBehalfTag(remarks).trim();
-  if (onBehalf) {
-    const [adminName, employeeName] = await Promise.all([
-      getUserDisplayName(supabase, actorId),
-      getUserDisplayName(supabase, userId),
-    ]);
-    const tag = buildOnBehalfTag(adminName, employeeName);
-    storedRemarks = storedRemarks ? `${tag}\n${storedRemarks}` : tag;
   }
 
   const { data: existingSubmission } = await supabase
@@ -1644,10 +1503,10 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         total_hours: totalHours,
         regular_hours: regularHours,
         overtime_hours: overtimeHours,
-        remarks: storedRemarks || null,
+        remarks: remarks || null,
         submitted_at: now,
         updated_at: now,
-        updated_by: actorId,
+        updated_by: userId,
       })
       .eq("submission_id", existingSubmission.submission_id)
       .select("*")
@@ -1668,9 +1527,9 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         total_hours: totalHours,
         regular_hours: regularHours,
         overtime_hours: overtimeHours,
-        remarks: storedRemarks || null,
+        remarks: remarks || null,
         submitted_at: now,
-        created_by: actorId,
+        created_by: userId,
       })
       .select("*")
       .single();
@@ -1718,7 +1577,7 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         current_wfs_id: firstStage.wfs_id,
         document_id: submission.submission_id,
         started_at: now,
-        created_by: actorId,
+        created_by: userId,
       })
       .select("instance_id")
       .single();
@@ -1786,13 +1645,12 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
  *
  * @param {Object} params
  * @param {string} params.weekStartDate - "YYYY-MM-DD" (Monday).
- * @param {string} [params.targetUserId] - admin only: recall this employee's
- *   timesheet ("Manage Time For…"). The admin is recorded as who recalled it.
  */
-export async function recallTimesheet({ weekStartDate, targetUserId }) {
-  const subject = await resolveTimeSubject(targetUserId);
-  if (subject.error) return { success: false, error: subject.error };
-  const { userId, actorId, supabase } = subject;
+export async function recallTimesheet({ weekStartDate }) {
+  const userId = await getSessionUserId();
+  if (!userId) return { success: false, error: "Not authenticated." };
+
+  const supabase = getSupabaseAdmin();
 
   const { data: submission, error: submissionError } = await supabase
     .from("time_t_timesheetsubmissions")
@@ -1803,7 +1661,7 @@ export async function recallTimesheet({ weekStartDate, targetUserId }) {
 
   if (submissionError) {
     console.error("recallTimesheet submission error:", describeError(submissionError));
-    return { success: false, error: "Unable to load the timesheet. Please try again." };
+    return { success: false, error: "Unable to load your timesheet. Please try again." };
   }
   if (!submission) return { success: false, error: "There is no submitted timesheet for this week." };
 
@@ -1850,7 +1708,7 @@ export async function recallTimesheet({ weekStartDate, targetUserId }) {
     .update({
       status_id: recalledStatusId,
       acted_at: now,
-      acted_by: actorId,
+      acted_by: userId,
       comments: null,
       is_active: false,
     })
@@ -1905,15 +1763,13 @@ export async function recallTimesheet({ weekStartDate, targetUserId }) {
  * @param {Object} params
  * @param {string} params.currentWeekStart - "YYYY-MM-DD" Monday of the user's
  *   current week (from the browser, so it matches their local week).
- * @param {string} [params.targetUserId] - admin only: count this employee's
- *   weeks instead ("Manage Time For…").
  * @returns {Promise<Array<{weekStart:string, weekEnd:string, daysLogged:number, totalHours:number, statusName:string}>>}
  */
-export async function loadMissedSubmissions({ currentWeekStart, targetUserId }) {
-  if (!currentWeekStart) return [];
-  const subject = await resolveTimeSubject(targetUserId);
-  if (subject.error) return [];
-  const { userId, supabase } = subject;
+export async function loadMissedSubmissions({ currentWeekStart }) {
+  const userId = await getSessionUserId();
+  if (!userId || !currentWeekStart) return [];
+
+  const supabase = getSupabaseAdmin();
   const lookbackStart = addDaysStr(currentWeekStart, -7 * 52);
 
   const { data: logs, error: logsError } = await supabase

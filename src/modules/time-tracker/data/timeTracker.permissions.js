@@ -32,7 +32,6 @@ export function getTimeTrackerPermissions(roles, orgRoles) {
     canViewTimesheetsTab: isAdmin,
     canViewApprovalsTab: isApprover,
     canViewSetupTab: isAdmin,
-    canManageOthersTime: isAdmin,
     canSubmitOwnTimesheet: isEmployee || isAdmin,
     canEditOwnTime: isEmployee || isAdmin,
     canViewOthersTimesheets: isAdmin,
