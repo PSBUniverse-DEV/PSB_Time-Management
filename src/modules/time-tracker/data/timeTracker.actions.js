@@ -1598,7 +1598,8 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
     .gte("clock_in_date", weekStartDate)
     .lte("clock_in_date", weekEndDate);
 
-  // Overtime is now per-log (time after the scheduled clock-out), not derived
+  // Overtime is now per-log (time before the scheduled clock-in or after the
+  // scheduled clock-out), not derived
   // from the weekly target, so these are summed straight from the logs.
   const round2 = (n) => Math.round(n * 100) / 100;
   const totalHours = round2((logs || []).reduce((sum, l) => sum + (Number(l.total_hours) || 0), 0));
