@@ -322,7 +322,13 @@ function useApplicationSetup({ applications = [], roles = [], initialSelectedApp
 
   const openEditApplicationDialog = useCallback((row) => {
     if (isSavingOrder || isMutatingAction) return;
-    setApplicationDraft({ name: String(row?.app_name || ""), desc: String(row?.app_desc || ""), moduleKey: String(row?.module_key || ""), devUrl: String(row?.dev_url || ""), prodUrl: String(row?.prod_url || "") });
+    setApplicationDraft({
+      name: String(row?.app_name || ""),
+      desc: row?.app_desc === "--" ? "" : String(row?.app_desc || ""),
+      moduleKey: row?.module_key === "--" ? "" : String(row?.module_key || ""),
+      devUrl: String(row?.dev_url || ""),
+      prodUrl: String(row?.prod_url || ""),
+    });
     setDialog({ kind: "edit-application", target: row, nextIsActive: null });
   }, [isMutatingAction, isSavingOrder]);
 
@@ -537,7 +543,7 @@ function ApplicationTable({
   decoratedApplications, decoratedSelectedAppRoles, selectedApp, expandedAppId, isSavingOrder, isMutatingAction,
   pendingDeactivatedAppIds, pendingDeactivatedRoleIds,
   handleApplicationRowClick, handleApplicationReorder,
-  editingAppId, onStartEditing, onStopEditing, onInlineEdit,
+  editingAppId, onStopEditing, onInlineEdit, openEditApplicationDialog,
   openToggleApplicationDialog, openDeactivateApplicationDialog, stageHardDeleteApplication, onUndoBatchAction,
   openAddRoleDialog,
   // role props
@@ -571,13 +577,12 @@ function ApplicationTable({
   ], [editingAppId, isMutatingAction, isSavingOrder, onInlineEdit, onStopEditing, selectedApp?.app_id]);
 
   const actions = useMemo(() => [
-    { key: "edit-application", label: "Edit", type: "secondary", icon: "pen", visible: (r) => String(r?.app_id ?? "") !== String(editingAppId ?? ""), disabled: () => isSavingOrder || isMutatingAction, onClick: (r) => onStartEditing(r) },
-    { key: "cancel-edit-application", label: "Cancel", type: "secondary", icon: "xmark", visible: (r) => String(r?.app_id ?? "") === String(editingAppId ?? ""), onClick: () => onStopEditing() },
+    { key: "edit-application", label: "Edit", type: "secondary", icon: "pen", visible: (r) => String(r?.app_id ?? "") !== String(editingAppId ?? ""), disabled: () => isSavingOrder || isMutatingAction, onClick: (r) => openEditApplicationDialog(r) },
     { key: "add-role", label: "+ Add Role", type: "success", icon: "plus", visible: (r) => String(r?.app_id ?? "") !== String(editingAppId ?? ""), disabled: () => isSavingOrder || isMutatingAction, onClick: () => openAddRoleDialog() },
     { key: "restore-application", label: "Restore", type: "secondary", icon: "rotate-left", visible: (r) => (!Boolean(r?.is_active_bool) || pendingDeactivatedAppIds.has(String(r?.app_id ?? ""))) && String(r?.app_id ?? "") !== String(editingAppId ?? ""), disabled: () => isSavingOrder || isMutatingAction, onClick: (r) => openToggleApplicationDialog(r) },
     { key: "deactivate-application", label: "Deactivate", type: "secondary", icon: "ban", visible: (r) => Boolean(r?.is_active_bool) && !pendingDeactivatedAppIds.has(String(r?.app_id ?? "")) && String(r?.app_id ?? "") !== String(editingAppId ?? ""), disabled: () => isSavingOrder || isMutatingAction, onClick: (r) => openDeactivateApplicationDialog(r) },
     { key: "delete-application", label: "Delete", type: "danger", icon: "trash", visible: (r) => String(r?.app_id ?? "") !== String(editingAppId ?? ""), confirm: true, confirmMessage: (r) => `Permanently delete ${r?.app_name || "this application"}? This action cannot be undone.`, disabled: () => isSavingOrder || isMutatingAction, onClick: (r) => stageHardDeleteApplication(r) },
-  ], [editingAppId, isMutatingAction, isSavingOrder, onStartEditing, onStopEditing, openAddRoleDialog, openDeactivateApplicationDialog, openToggleApplicationDialog, pendingDeactivatedAppIds, stageHardDeleteApplication]);
+  ], [editingAppId, isMutatingAction, isSavingOrder, openAddRoleDialog, openDeactivateApplicationDialog, openEditApplicationDialog, openToggleApplicationDialog, pendingDeactivatedAppIds, stageHardDeleteApplication]);
 
   // ── Role columns for nested detail ──
   const roleColumns = useMemo(() => [
@@ -689,7 +694,7 @@ export default function ApplicationSetupView({ applications, roles, initialSelec
         isSavingOrder={h.isSavingOrder} isMutatingAction={h.isMutatingAction}
         pendingDeactivatedAppIds={h.pendingDeactivatedAppIds} pendingDeactivatedRoleIds={h.pendingDeactivatedRoleIds}
         handleApplicationRowClick={h.handleApplicationRowClick} handleApplicationReorder={h.handleApplicationReorder}
-        editingAppId={h.editingAppId} onStartEditing={h.startEditingApp} onStopEditing={h.stopEditingApp}
+        editingAppId={h.editingAppId} onStopEditing={h.stopEditingApp} openEditApplicationDialog={h.openEditApplicationDialog}
         onInlineEdit={h.handleInlineEditApplication}
         openToggleApplicationDialog={h.openToggleApplicationDialog} openDeactivateApplicationDialog={h.openDeactivateApplicationDialog}
         stageHardDeleteApplication={h.stageHardDeleteApplication} onUndoBatchAction={h.unstageHardDeleteApplication}
