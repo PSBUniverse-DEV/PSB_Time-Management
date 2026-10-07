@@ -322,7 +322,7 @@ async function createLogin(postOk, session, ssoEnabled = true) {
     "next/image": defaultExport("Image"), "next/navigation": { useRouter: () => ({ replace() {} }), useSearchParams: () => ({ get: () => null }) },
     "react-bootstrap": { Button: "Button", Form: "Form" },
     "@fortawesome/react-fontawesome": { FontAwesomeIcon: "Icon" }, "@fortawesome/free-solid-svg-icons": { faEye: {}, faEyeSlash: {} },
-    "@/styles/psb_logo.png": defaultExport("logo"),
+    "@/styles/psbuniverse_icon.svg": defaultExport("logo"),
     "@/core/supabase/client": { getSupabase: () => ({ auth: { signInWithPassword: async () => ({ data: { session: { access_token: "test-token" } } }) } }) },
     "@/core/auth/useAuth": { useAuth: () => ({ authUser: null }) },
     "@/shared/utils/toast": { toastError: (message) => errors.push(message), toastSuccess: (message) => successes.push(message) },

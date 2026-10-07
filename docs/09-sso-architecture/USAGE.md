@@ -156,8 +156,14 @@ Module `module_key` slugs: `project-map`, `time-tracker`, `gutter-app`,
 
 - **`psb_s_application.module_key`** — unique, non-null slug per app; a module's
   `NEXT_PUBLIC_MODULE_KEY` must equal it, and the row must be `is_active = true`.
-- **Card `route_path`** (Card Module Setup) — point at the real subdomain
-  (`https://timesheets.psbuniverse.com/…`), never a `vercel.app` URL.
+- **Application URLs** (Application Setup) — for an app on its own subdomain,
+  set `dev_url` and `prod_url` to the site address only
+  (`https://dev-timesheets.vercel.app`, `https://timesheets.psbuniverse.com`).
+  Leave both blank for apps served by core.
+- **Card `route_path`** (Card Module Setup) — always a plain path
+  (`/time-tracker`). The dashboard prefixes it with the card's application URL
+  for the current `NEXT_PUBLIC_ENV`. If the app has URLs but none for the
+  current environment (e.g. local), the card is shown but not clickable.
 - **User access** — a user reaches a module only with an active
   `psb_m_userapproleaccess` row for that `app_id` (User Master Setup).
 - **Hosting** — core and every module on `*.psbuniverse.com` over HTTPS.
