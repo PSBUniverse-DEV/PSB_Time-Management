@@ -15,6 +15,7 @@ import {
   Button,
   Input,
   Modal,
+  SearchSelect,
   StatusBadge,
   TableZ,
   toastError,
@@ -1626,22 +1627,19 @@ function EditEntryModal({ row, onClose, onSave }) {
             </label>
           </div>
 
-          <label className="tt-modal-field">
+          <div className="tt-modal-field">
             <span className="tt-modal-label">Reason for Edit <span className="tt-modal-required">*</span></span>
-            <select
-              className="tt-modal-select"
-              value={reasonId}
-              onChange={(event) => setReasonId(event.target.value)}
+            <SearchSelect
+              className="tt-search-select"
+              options={reasons.map((reason) => ({ value: reason.status_id, label: reason.status_name }))}
+              value={reasonId || null}
+              onChange={(value) => setReasonId(value == null ? "" : String(value))}
+              placeholder={reasonsLoading ? "Loading..." : "Select a reason"}
+              searchPlaceholder="Search reasons..."
               disabled={reasonsLoading}
-            >
-              <option value="">{reasonsLoading ? "Loading..." : "Select a reason"}</option>
-              {reasons.map((reason) => (
-                <option key={reason.status_id} value={reason.status_id}>
-                  {reason.status_name}
-                </option>
-              ))}
-            </select>
-          </label>
+              menuStyle={{ fontSize: 12 }}
+            />
+          </div>
 
           <label className="tt-modal-field">
             <span className="tt-modal-label">Notes / Memo</span>
@@ -1749,6 +1747,10 @@ function EmployeeHoursSection() {
     // A user already on an inactive model still sees it, marked, so the
     // dropdown never shows the wrong value.
     const pickable = models.filter((m) => m.is_active && m.days.length > 0);
+    const pickableOptions = pickable.map((m) => ({
+      value: m.model_id,
+      label: `${m.model_name} · ${formatHours(m.weekly_hours)}`,
+    }));
 
     return [
       { key: "name", label: "Employee", minWidth: 220 },
@@ -1759,29 +1761,21 @@ function EmployeeHoursSection() {
         render: (row) => {
           const current = models.find((m) => m.model_id === row.model_id);
           const showCurrentSeparately = current && !pickable.includes(current);
+          const options = showCurrentSeparately
+            ? [{ value: current.model_id, label: `${current.model_name} (inactive)` }, ...pickableOptions]
+            : pickableOptions;
+
           return (
-            <select
-              className="tt-modal-select tt-setup-model-select"
-              value={row.model_id ?? ""}
+            <SearchSelect
+              className="tt-search-select tt-setup-model-search"
+              options={options}
+              value={row.model_id ?? null}
+              onChange={(value) => handleAssign(row, value)}
+              placeholder={pickable.length ? "Not assigned — pick a model" : "No models set up yet"}
+              searchPlaceholder="Search models..."
               disabled={savingUserId === row.user_id || (!pickable.length && !current)}
-              onChange={(event) => handleAssign(row, event.target.value)}
-            >
-              {row.model_id == null && (
-                <option value="" disabled>
-                  {pickable.length ? "Not assigned — pick a model" : "No models set up yet"}
-                </option>
-              )}
-              {showCurrentSeparately && (
-                <option value={current.model_id} disabled>
-                  {current.model_name} (inactive)
-                </option>
-              )}
-              {pickable.map((m) => (
-                <option key={m.model_id} value={m.model_id}>
-                  {m.model_name} · {formatHours(m.weekly_hours)}
-                </option>
-              ))}
-            </select>
+              menuStyle={{ fontSize: 12 }}
+            />
           );
         },
       },
@@ -3649,26 +3643,21 @@ function ManageTimeForPage() {
             <label className="tt-manage-picker-label" htmlFor="tt-manage-employee">
               Employee
             </label>
-            <select
+            <SearchSelect
               id="tt-manage-employee"
-              className="tt-modal-select tt-manage-select"
-              value={employeeId}
-              onChange={(event) => setEmployeeId(event.target.value)}
+              className="tt-search-select tt-manage-select"
+              options={employees.map((row) => ({ value: String(row.user_id), label: row.name }))}
+              value={employeeId || null}
+              onChange={(value) => setEmployeeId(value == null ? "" : String(value))}
+              placeholder={loadingEmployees
+                ? "Loading employees..."
+                : employees.length
+                  ? "Select an employee"
+                  : "No employees with a work schedule"}
+              searchPlaceholder="Search employees..."
               disabled={loadingEmployees}
-            >
-              <option value="">
-                {loadingEmployees
-                  ? "Loading employees..."
-                  : employees.length
-                    ? "Select an employee"
-                    : "No employees with a work schedule"}
-              </option>
-              {employees.map((row) => (
-                <option key={row.user_id} value={String(row.user_id)}>
-                  {row.name}
-                </option>
-              ))}
-            </select>
+              menuStyle={{ fontSize: 12 }}
+            />
             <RefreshButton onClick={reloadEmployees} loading={loadingEmployees} label="Refresh employee list" />
           </div>
         </div>
