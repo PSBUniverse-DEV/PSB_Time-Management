@@ -2068,8 +2068,9 @@ function ScheduleModelModal({ model, onClose, onSave }) {
         each hour late costs 0.5 hr for 11–45 min and 1 hr for 46–59 min. The break is deducted
         only after the first half of the day&apos;s hours, so half
         days keep their full time (leave both break times empty for no break). Work after Clock
-        Out counts as overtime in 30-minute blocks. Clocking in early also counts as overtime: nothing
-        for the first 10 min, then 0.5 hr for 11–45 min and 1 hr for 46–59 min of each hour early.
+        Out counts as overtime in 30-minute blocks. Clocking in early also counts as overtime in
+        30-minute blocks counted back from Clock In: nothing under 30 min early, then each further
+        block counts once you are within 10 min of it (e.g. for 8:00 — 7:30 is 0.5 hr, 7:10 is 1 hr).
         For night shifts, a time earlier than the one before it counts as the next day (e.g. Clock
         In 22:00, Clock Out 07:00). Daily hours are rounded to the half hour (0–15 min down,
         16–35 min to :30, 36+ min up).
