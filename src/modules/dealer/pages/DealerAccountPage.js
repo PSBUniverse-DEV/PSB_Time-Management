@@ -46,6 +46,7 @@ export default async function DealerAccountPage() {
       lockAttempts={DEALER_MAX_FAILED_ATTEMPTS}
       lockMinutes={DEALER_LOCK_MINUTES}
       files={data.files}
+      projects={data.projects}
     />
   );
 }

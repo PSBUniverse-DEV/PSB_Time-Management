@@ -6,10 +6,11 @@ import DealerProfileForm from "./DealerProfileForm";
 import DealerAddressForm from "./DealerAddressForm";
 import DealerPasswordForm from "./DealerPasswordForm";
 import DealerAttachments from "./DealerAttachments";
+import DealerProjects from "./DealerProjects";
 import DealerAccountView from "../pages/DealerAccountView";
 import { COMPANY_FIELDS, CONTACT_FIELDS } from "../data/dealerPortal.data";
 
-const SECTIONS = ["overview", "company", "contacts", "address", "security", "support"];
+const SECTIONS = ["overview", "company", "contacts", "address", "security", "projects", "support"];
 const PSB_CONTACT = { email: "Sales.pgd@premiumsteelgroup.com", phone: "817-502-2520" };
 
 // The current section is the address bar's hash (/dealer/account#company), so
@@ -44,6 +45,7 @@ export default function DealerAccountWorkspace({
   lockAttempts,
   lockMinutes,
   files,
+  projects,
 }) {
   const section = useSyncExternalStore(subscribeToHash, readSectionFromHash, readSectionOnServer);
 
@@ -154,6 +156,10 @@ export default function DealerAccountWorkspace({
             </div>
           </div>
         </section>
+      </div>
+
+      <div hidden={section !== "projects"}>
+        <DealerProjects records={projects} />
       </div>
 
       <div hidden={section !== "support"}>

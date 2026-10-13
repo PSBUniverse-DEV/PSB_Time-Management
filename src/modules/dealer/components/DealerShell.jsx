@@ -14,7 +14,7 @@ const ACCOUNT_NAV = [
 ];
 
 // Planned sections. Shown so dealers know they are coming; not selectable yet.
-const LATER_NAV = ["Orders", "Quotes", "Invoices", "Documents"];
+const LATER_NAV = ["Quotes", "Invoices", "Documents"];
 
 /**
  * Frame for the signed-in dealer area: one full-height sidebar (brand, dealer
@@ -73,6 +73,14 @@ export default function DealerShell({ dealer, username, active, onSelect, childr
 
         <nav className="dp-nav" aria-label="Business">
           <div className="dp-nav-title">Business</div>
+          <button
+            type="button"
+            className={`dp-nav-item${active === "projects" ? " is-active" : ""}`}
+            aria-current={active === "projects" ? "page" : undefined}
+            onClick={() => onSelect?.("projects")}
+          >
+            Projects
+          </button>
           {LATER_NAV.map((label) => (
             <span key={label} className="dp-nav-item is-later">
               {label} <span className="dp-nav-tag">Later</span>

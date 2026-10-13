@@ -8,6 +8,7 @@ import {
   verifyDealerPassword,
 } from "@/core/dealer/dealerAuth";
 import { assertFileAllowed, createSignedFileUpload, getSignedFileUrl } from "@/core/storage/files.service";
+import { loadDealerRecords } from "@/core/dealer/dealerRecordSources";
 import { DEALER_DOC_TYPES, DEALER_FILE_ACCEPT, DEALER_FILE_MAX_BYTES } from "./dealerPortal.data";
 
 const DEALER_TABLE = "psb_s_dealermaster";
@@ -125,6 +126,7 @@ export async function loadDealerAccountData() {
     username: context.account.username,
     lastLoginAt: context.account.last_login_at || null,
     files: await loadDealerFiles(context.supabase, context.dealer.dealer_id),
+    projects: await loadDealerProjects(context.dealer.dealer_id),
   };
 }
 
@@ -313,5 +315,20 @@ export async function getDealerFileUrlAction(fileId) {
   } catch (urlError) {
     console.error("getDealerFileUrlAction:", urlError?.message);
     return { success: false, error: "Could not open the file. Please try again." };
+  }
+}
+
+/**
+ * Records linked to the signed-in dealer from every application, read live.
+ * The dealer id always comes from the verified session (see loadDealerContext).
+ * A failure is logged and shows as an empty list, so the rest of the account
+ * page still loads.
+ */
+async function loadDealerProjects(dealerId) {
+  try {
+    return await loadDealerRecords(dealerId);
+  } catch (recordsError) {
+    console.error("loadDealerProjects:", recordsError?.message);
+    return [];
   }
 }
