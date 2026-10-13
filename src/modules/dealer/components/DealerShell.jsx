@@ -83,7 +83,7 @@ export default function DealerShell({ dealer, username, active, onSelect, childr
           </button>
           {LATER_NAV.map((label) => (
             <span key={label} className="dp-nav-item is-later">
-              {label} <span className="dp-nav-tag">Later</span>
+              {label} <span className="dp-nav-tag">Locked</span>
             </span>
           ))}
         </nav>
