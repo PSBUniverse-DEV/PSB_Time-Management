@@ -3022,6 +3022,7 @@
 
   /* Week header: ‹ week › centred, actions below; no CSV export on phones */
   .tt-app-layout .tt-main {
+    min-height: 0;
     padding: 0 0.75rem;
   }
 
@@ -3177,13 +3178,16 @@
     border-radius: 14px;
   }
 
+  /* Spans the panel edge to edge (cancels .tt-summary-body's 1.25rem padding). */
   .tt-app-layout .tt-summary-actions-bar {
     position: sticky;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     z-index: 5;
-    margin-top: 0.25rem;
-    padding: 0.6rem 0;
+    margin: 0.25rem -1.25rem -1.25rem;
+    padding: 0.6rem 1.25rem 0.75rem;
     background: #ffffff;
+    border-top: 1px solid #e1ebec;
+    border-radius: 0 0 14px 14px;
   }
 }
 
