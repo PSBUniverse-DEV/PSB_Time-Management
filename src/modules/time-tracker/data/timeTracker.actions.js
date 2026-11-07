@@ -1748,7 +1748,7 @@ export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
 
   const { data: submission } = await supabase
     .from("time_t_timesheetsubmissions")
-    .select("submission_id, submitted_at, remarks, weekly_hours_target")
+    .select("submission_id, submitted_at, remarks, weekly_hours_target, schedule_snapshot")
     .eq("user_id", userId)
     .eq("week_start_date", weekStartDate)
     .maybeSingle();
@@ -1861,6 +1861,12 @@ export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
   return {
     hasSubmission: true,
     statusName,
+    // Pending/Approved: the schedule saved at submit, in step with the frozen
+    // weekly target. Otherwise null, and screens show the current schedule.
+    frozenSchedule:
+      LOCKED_SUBMISSION_STATUSES.has(String(statusName || "").toLowerCase()) && submission.schedule_snapshot
+        ? submission.schedule_snapshot
+        : null,
     // Pending/Approved: the weekly target saved at submit (frozen). Otherwise
     // null, and screens show the employee's current target.
     frozenWeeklyHoursTarget:
@@ -1946,6 +1952,7 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
   // while it's Pending or Approved, the week shows these even if the model changes later.
   let snapshotTarget;
   let snapshotModelCode;
+  let snapshotSchedule;
   try {
     const [targetInfo, model] = await Promise.all([
       loadHoursTargetInfo(supabase, userId),
@@ -1953,6 +1960,11 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
     ]);
     snapshotTarget = targetInfo.weeklyHoursTarget;
     snapshotModelCode = model?.modelCode ?? null;
+    // Same shape as loadUserScheduleModel, so the Summary's Work Schedule card
+    // can show a frozen week exactly as it was submitted.
+    snapshotSchedule = model
+      ? { modelId: model.modelId, modelCode: model.modelCode, modelName: model.modelName, days: model.days || [] }
+      : null;
   } catch (err) {
     console.error("submitTimesheet schedule snapshot error:", err.message);
     return { success: false, error: "Unable to load the work schedule. Nothing was submitted." };
@@ -2013,6 +2025,7 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         remarks: storedRemarks || null,
         weekly_hours_target: snapshotTarget,
         schedule_model_code: snapshotModelCode,
+        schedule_snapshot: snapshotSchedule,
         submitted_at: now,
         updated_at: now,
         updated_by: actorId,
@@ -2039,6 +2052,7 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         remarks: storedRemarks || null,
         weekly_hours_target: snapshotTarget,
         schedule_model_code: snapshotModelCode,
+        schedule_snapshot: snapshotSchedule,
         submitted_at: now,
         created_by: actorId,
       })
