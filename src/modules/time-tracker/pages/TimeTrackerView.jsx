@@ -903,6 +903,14 @@ function Sidebar({
     timeZone: APP_TIMEZONE,
   });
 
+  // Dallas season right now, from the same live clock: "Central Standard Time (CST)"
+  // or "Central Daylight Time (CDT)". Switches by itself on the change-over dates.
+  const zoneName = (style) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: APP_TIMEZONE, timeZoneName: style })
+      .formatToParts(currentTime)
+      .find((part) => part.type === "timeZoneName")?.value || "";
+  const zoneLabel = `${zoneName("long")} (${zoneName("short")})`;
+
   return (
     <header className="tt-sidebar">
       <div className="tt-module-identity">
@@ -921,6 +929,7 @@ function Sidebar({
         <div className="tt-sidebar-clock" aria-live="off">
           <div className="tt-sidebar-clock-time">{timeStr}</div>
           <div className="tt-sidebar-clock-date">{dateStr}</div>
+          <div className="tt-sidebar-clock-date" title="Dallas standard time (CST) or daylight time (CDT)">{zoneLabel}</div>
         </div>
       )}
 
@@ -1281,7 +1290,9 @@ function WorkScheduleCard({ schedule, weeklyHoursTarget, seasonDate }) {
   }
 
   const seasonDays = schedule.days.map((d) => scheduleDayOnDate(d, seasonDate));
-  const seasonLabel = daylightShiftMinutes(seasonDate) || isDallasDaylightTime(seasonDate) ? "CDT" : "CST";
+  const seasonLabel = daylightShiftMinutes(seasonDate) || isDallasDaylightTime(seasonDate)
+    ? "Daylight time (CDT)"
+    : "Standard time (CST)";
   const groups = groupScheduleDays(seasonDays);
   const workingDayNumbers = schedule.days.map((d) => d.dayOfWeek);
   const restDayNumbers = [1, 2, 3, 4, 5, 6, 7].filter((n) => !workingDayNumbers.includes(n));
