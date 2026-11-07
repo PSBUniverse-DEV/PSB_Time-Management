@@ -2080,6 +2080,14 @@ function ScheduleModelModal({ model, onClose, onSave }) {
         )}
       </div>
 
+      {/* Editing a model changes the schedule of everyone on it. */}
+      {model?.employee_count > 0 && (
+        <p className="tt-setup-hint" role="note" style={{ color: "#b45309", fontWeight: 600 }}>
+          {model.employee_count} employee{model.employee_count === 1 ? " uses" : "s use"} this model.
+          Saving changes their working days and weekly hours target, and their hours from their next clock-out.
+        </p>
+      )}
+
       {/* Quick setup: pick the days, fill one row, Apply. Days that differ are
           fine-tuned in the table below. */}
       <div className="tt-schedule-quick">
