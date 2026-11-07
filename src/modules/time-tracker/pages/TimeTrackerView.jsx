@@ -3890,7 +3890,7 @@ function ManageTimeForPage() {
           totalHours={week.totalHours}
           regularHours={week.regularHours}
           overtimeHours={week.overtimeHours}
-          weeklyHoursTarget={week.weeklyHoursTarget}
+          weeklyHoursTarget={week.submissionStatus?.frozenWeeklyHoursTarget ?? week.weeklyHoursTarget}
           schedule={week.schedule}
           workedDays={workedDays}
           submissionStatus={week.submissionStatus}
@@ -4183,7 +4183,7 @@ export default function TimeTrackerView({ initialData }) {
           totalHours={totalHours}
           regularHours={regularHours}
           overtimeHours={overtimeHours}
-          weeklyHoursTarget={weeklyHoursTarget}
+          weeklyHoursTarget={submissionStatus?.frozenWeeklyHoursTarget ?? weeklyHoursTarget}
           schedule={schedule}
           workedDays={workedDays}
           submissionStatus={submissionStatus}

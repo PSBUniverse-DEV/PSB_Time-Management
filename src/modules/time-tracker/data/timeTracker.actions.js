@@ -1643,6 +1643,18 @@ export async function recalculateWeekHours({ weekStartDate, targetUserId }) {
   const { locked } = await isWeekLocked(supabase, userId, weekStart);
   if (locked) return { success: true, updated: 0, locked: true };
 
+  const result = await applyCurrentScheduleToWeek(supabase, userId, weekStart, weekEnd);
+  return result.success ? { ...result, locked: false } : result;
+}
+
+/**
+ * Re-apply the employee's CURRENT schedule to one week's clocked-out logs and
+ * write back only the logs whose hours changed. Used by Refresh
+ * (recalculateWeekHours) and by Submit (submitTimesheet). Callers make sure
+ * the week isn't Pending or Approved first — those keep their hours.
+ * @returns {Promise<{success:boolean, updated?:number, error?:string}>}
+ */
+async function applyCurrentScheduleToWeek(supabase, userId, weekStart, weekEnd) {
   let rulesByDay;
   try {
     rulesByDay = await loadScheduleRulesForUser(supabase, userId);
@@ -1693,7 +1705,7 @@ export async function recalculateWeekHours({ weekStartDate, targetUserId }) {
     updated += 1;
   }
 
-  return { success: true, updated, locked: false };
+  return { success: true, updated };
 }
 
 const WORKFLOW_STATUS_PENDING = "Pending";
@@ -1736,7 +1748,7 @@ export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
 
   const { data: submission } = await supabase
     .from("time_t_timesheetsubmissions")
-    .select("submission_id, submitted_at, remarks")
+    .select("submission_id, submitted_at, remarks, weekly_hours_target")
     .eq("user_id", userId)
     .eq("week_start_date", weekStartDate)
     .maybeSingle();
@@ -1849,6 +1861,12 @@ export async function loadWeekSubmissionStatus(weekStartDate, targetUserId) {
   return {
     hasSubmission: true,
     statusName,
+    // Pending/Approved: the weekly target saved at submit (frozen). Otherwise
+    // null, and screens show the employee's current target.
+    frozenWeeklyHoursTarget:
+      LOCKED_SUBMISSION_STATUSES.has(String(statusName || "").toLowerCase()) && submission.weekly_hours_target != null
+        ? Number(submission.weekly_hours_target)
+        : null,
     submittedAt: submission.submitted_at,
     // The "on behalf of" tag is for the approver; the editable box gets the
     // remarks without it so a resubmit doesn't add a second copy.
@@ -1915,6 +1933,31 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
     }
   }
 
+  // Submit with the employee's CURRENT schedule: re-apply it to this week's
+  // hours first (same as Refresh), so a model changed since the hours were
+  // saved is what gets submitted. The week isn't Pending/Approved here (checked above).
+  const submitWeekStart = getMondayOfWeekStr(weekStartDate);
+  const recalc = await applyCurrentScheduleToWeek(supabase, userId, submitWeekStart, addDaysStr(submitWeekStart, 6));
+  if (!recalc.success) {
+    return { success: false, error: `${recalc.error} Nothing was submitted.` };
+  }
+
+  // Keep the weekly target (and the model it came from) on the timesheet:
+  // while it's Pending or Approved, the week shows these even if the model changes later.
+  let snapshotTarget;
+  let snapshotModelCode;
+  try {
+    const [targetInfo, model] = await Promise.all([
+      loadHoursTargetInfo(supabase, userId),
+      loadUserScheduleModel(supabase, userId),
+    ]);
+    snapshotTarget = targetInfo.weeklyHoursTarget;
+    snapshotModelCode = model?.modelCode ?? null;
+  } catch (err) {
+    console.error("submitTimesheet schedule snapshot error:", err.message);
+    return { success: false, error: "Unable to load the work schedule. Nothing was submitted." };
+  }
+
   const { data: logs } = await supabase
     .from("time_t_logs")
     .select("total_hours, overtime_hours")
@@ -1968,6 +2011,8 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         regular_hours: regularHours,
         overtime_hours: overtimeHours,
         remarks: storedRemarks || null,
+        weekly_hours_target: snapshotTarget,
+        schedule_model_code: snapshotModelCode,
         submitted_at: now,
         updated_at: now,
         updated_by: actorId,
@@ -1992,6 +2037,8 @@ export async function submitTimesheet({ weekStartDate, weekEndDate, remarks, tar
         regular_hours: regularHours,
         overtime_hours: overtimeHours,
         remarks: storedRemarks || null,
+        weekly_hours_target: snapshotTarget,
+        schedule_model_code: snapshotModelCode,
         submitted_at: now,
         created_by: actorId,
       })
@@ -2473,7 +2520,7 @@ export async function loadSubmissionLogs(submissionId) {
 
   const { data: submission } = await supabase
     .from("time_t_timesheetsubmissions")
-    .select("user_id")
+    .select("user_id, week_start_date, weekly_hours_target")
     .eq("submission_id", submissionId)
     .maybeSingle();
   if (!submission) return { logs: [], weeklyHoursTarget: DEFAULT_WEEKLY_HOURS_TARGET };
@@ -2499,6 +2546,12 @@ export async function loadSubmissionLogs(submissionId) {
       .order("clock_in_date", { ascending: true }),
     loadHoursTargetInfo(supabase, submission.user_id),
   ]);
+
+  // Pending/Approved timesheets show the weekly target saved when submitted.
+  if (submission.weekly_hours_target != null) {
+    const { locked } = await isWeekLocked(supabase, submission.user_id, submission.week_start_date);
+    if (locked) hoursTargetResult.weeklyHoursTarget = Number(submission.weekly_hours_target);
+  }
 
   if (logsResult.error) {
     console.error("loadSubmissionLogs error:", describeError(logsResult.error));
