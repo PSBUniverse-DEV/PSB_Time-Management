@@ -85,7 +85,10 @@ import {
   getAppTodayDate,
   getAppTodayStr,
   groupScheduleDays,
+  isDallasDaylightTime,
+  daylightShiftMinutes,
   resolveScheduleDay,
+  scheduleDayOnDate,
   summarizeScheduleDays,
   validateScheduleDay,
 } from "../data/timeTracker.data";
@@ -1264,7 +1267,9 @@ function SummaryCard({ icon, iconClass, label, sub, value, valueClass }) {
  * The employee's assigned work schedule, grouped so identical days show once
  * (e.g. "Mon–Fri · 8:00 AM – 5:00 PM · Break 12:00 PM – 1:00 PM").
  */
-function WorkScheduleCard({ schedule, weeklyHoursTarget }) {
+// seasonDate: "YYYY-MM-DD" (the week's Monday). Model times are CST; on a
+// daylight-time week they're shown 1 hour later, as they read on the Dallas clock.
+function WorkScheduleCard({ schedule, weeklyHoursTarget, seasonDate }) {
   if (!schedule || !schedule.days?.length) {
     return (
       <div className="tt-summary-schedule-card is-empty">
@@ -1275,7 +1280,9 @@ function WorkScheduleCard({ schedule, weeklyHoursTarget }) {
     );
   }
 
-  const groups = groupScheduleDays(schedule.days);
+  const seasonDays = schedule.days.map((d) => scheduleDayOnDate(d, seasonDate));
+  const seasonLabel = daylightShiftMinutes(seasonDate) || isDallasDaylightTime(seasonDate) ? "CDT" : "CST";
+  const groups = groupScheduleDays(seasonDays);
   const workingDayNumbers = schedule.days.map((d) => d.dayOfWeek);
   const restDayNumbers = [1, 2, 3, 4, 5, 6, 7].filter((n) => !workingDayNumbers.includes(n));
 
@@ -1285,7 +1292,9 @@ function WorkScheduleCard({ schedule, weeklyHoursTarget }) {
         <span className="tt-summary-schedule-name" title={schedule.modelName || undefined}>
           {schedule.modelCode || schedule.modelName || "Work Schedule"}
         </span>
-        <span className="tt-summary-schedule-hours">{weeklyHoursTarget.toFixed(2)} hrs/week</span>
+        <span className="tt-summary-schedule-hours" title="Dallas time for this week">
+          {weeklyHoursTarget.toFixed(2)} hrs/week · {seasonLabel}
+        </span>
       </div>
 
       <ul className="tt-summary-schedule-list">
@@ -1365,7 +1374,7 @@ function TimesheetSummary({
       <div className="tt-summary-body">
         <section className="tt-summary-section">
           <h4 className="tt-summary-section-label">Work Schedule</h4>
-          <WorkScheduleCard schedule={schedule} weeklyHoursTarget={weeklyHoursTarget} />
+          <WorkScheduleCard schedule={schedule} weeklyHoursTarget={weeklyHoursTarget} seasonDate={toDateStr(weekRange.start)} />
         </section>
 
         {/* Hours Breakdown */}
@@ -2201,7 +2210,9 @@ function ScheduleModelModal({ model, onClose, onSave }) {
       </div>
 
       <p className="tt-setup-hint tt-schedule-note">
-        All times are Central Time (Dallas). Clock-in has a 10-minute grace period; after that,
+        Enter times in Dallas standard time (CST). From March to November (daylight time, CDT) every
+        time moves 1 hour later on the Dallas clock automatically (e.g. 8:00 → 9:00), and moves back
+        when daylight time ends. Clock-in has a 10-minute grace period; after that,
         each hour late costs 0.5 hr for 11–45 min and 1 hr for 46–59 min. Only the part of the
         break you were clocked in for is deducted (e.g. break 2–3: 1:00–5:00 counts 3 hr,
         8:00–1:00 counts 5 hr; leave both break times empty for no break). Work after Clock
