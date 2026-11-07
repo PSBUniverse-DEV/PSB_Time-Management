@@ -2085,6 +2085,8 @@ function ScheduleModelModal({ model, onClose, onSave }) {
         <p className="tt-setup-hint" role="note" style={{ color: "#b45309", fontWeight: 600 }}>
           {model.employee_count} employee{model.employee_count === 1 ? " uses" : "s use"} this model.
           Saving changes their working days and weekly hours target, and their hours from their next clock-out.
+          Hours already saved stay as they are, but past weeks will show the new weekly target, and
+          correcting an old time entry recalculates it with the new schedule.
         </p>
       )}
 

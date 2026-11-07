@@ -964,6 +964,26 @@ export async function saveScheduleModel({ modelId, modelName, days }) {
     return { success: false, error: "Pick at least one working day." };
   }
 
+  // ── Names are unique (ignoring case and extra spaces) ──
+  // Two models with the same name can't be told apart in the employee
+  // dropdown. Inactive models count too, since they can be restored.
+  const nameKey = name.replace(/\s+/g, " ").toLowerCase();
+  const { data: namedModels, error: namesError } = await supabase
+    .from("time_s_schedulemodel")
+    .select("model_id, model_name, model_code");
+  if (namesError) {
+    console.error("saveScheduleModel name check error:", describeError(namesError));
+    return { success: false, error: "Unable to check the model name. Please try again." };
+  }
+  const sameName = (namedModels || []).find(
+    (row) =>
+      String(row.model_id) !== String(modelId || "") &&
+      String(row.model_name || "").trim().replace(/\s+/g, " ").toLowerCase() === nameKey,
+  );
+  if (sameName) {
+    return { success: false, error: `"${sameName.model_name}" (${sameName.model_code}) already uses this name. Pick another name.` };
+  }
+
   // ── Save the model header ──
   // Code and order are set once, when the model is created
   // (nextScheduleModelCodeAndOrder); editing changes only the name and days.
